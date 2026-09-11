@@ -10,7 +10,18 @@ export interface FrameInfo {
   fps: number;
 }
 
-const WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm';
+// JS wrapper (npm) and WASM glue must be the same version — WASM is self-hosted
+// in public/wasm so the app never depends on a third-party CDN for the runtime.
+const VISION_VERSION = '0.10.35';
+const LOCAL_WASM = `${import.meta.env.BASE_URL || './'}wasm`;
+
+function wasmMirrors(): string[] {
+  return [
+    LOCAL_WASM,
+    `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`,
+    `https://unpkg.com/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`,
+  ];
+}
 const POSE_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
 const SEG_URL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite';
 
@@ -32,7 +43,20 @@ export class CVEngine {
 
   async init() {
     this.onStatus('loading vision runtime...');
-    const fileset = await FilesetResolver.forVisionTasks(WASM);
+    let fileset = null;
+    for (const mirror of wasmMirrors()) {
+      try {
+        fileset = await FilesetResolver.forVisionTasks(mirror);
+        break;
+      } catch (e) {
+        const detail = (typeof Event !== 'undefined' && e instanceof Event)
+          ? 'script/binary failed to load (blocked or unreachable)'
+          : ((e as any)?.message ?? e);
+        console.warn(`vision runtime mirror failed: ${mirror} —`, detail);
+        this.onStatus(`runtime mirror failed, trying next... (${mirror})`);
+      }
+    }
+    if (!fileset) throw new Error('vision runtime unreachable (same-origin + jsdelivr + unpkg all failed)');
     this.onStatus('loading pose model...');
     try {
       this.pose = await PoseLandmarker.createFromOptions(fileset, {
