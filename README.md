@@ -117,7 +117,7 @@ For Hardware:
 *This recording demonstrates the illustrated zip/extract interaction, entering the game, switching Classic difficulty settings, and selecting Personal Best. It shows the actual interface without camera activation; it does not demonstrate live pose inference or a completed camera round.*
 
 # Additional Demos
-[Interactive demo source](src/ui/intro.ts) · [Browser interaction checks](tests/frontend.spec.ts) · [Workflow diagram](docs/workflow.svg). Run the app locally to try the illustrated demo without camera access. No hosted demo URL has been provided.
+[Interactive demo source](src/ui/intro.ts) · [Browser interaction checks](tests/frontend.spec.ts) · [Workflow diagram](docs/workflow.svg). Run the app locally to try the illustrated demo without camera access. [Live hosted demo](https://uselessprojecttemp-lac.vercel.app/).
 
 ## Team Contributions
 - Mevin Benty (mevinb): Built the interactive compression introduction with drag, keyboard and toggle controls; redesigned the machine interface; added mobile gameplay, camera switching, Personal Best mode, local score records and shareable result cards; integrated demo artwork and self-hosted fonts; and added Playwright coverage for interactions and responsive layouts. Based on team commits `f9d5966` and `cd2335f`.
