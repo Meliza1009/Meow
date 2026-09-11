@@ -1,6 +1,6 @@
 import './style.css';
 import { CVEngine, THUMB_W, THUMB_H, type FrameInfo, type MaskThumb } from './cv/engine';
-import { ema, poseFeatures, scoreAvailableParts, maskIoU, type Pt, type Coverage } from './cv/metrics';
+import { ema, poseFeatures, compressionProgress, scoreAvailableParts, maskIoU, type Pt, type Coverage } from './cv/metrics';
 import { METHODS, sanitizeName, type MethodId } from './coach/methods';
 import { pickCue, milestoneLog } from './coach/rules';
 import { logLine, blip, describeError, cameraHint } from './ui/terminal';
@@ -21,6 +21,7 @@ const overlay = $('overlay') as HTMLCanvasElement;
 const octx = overlay.getContext('2d')!;
 const logEl = $('log'), cueEl = $('cue'), warnEl = $('warn');
 const bigPct = $('bigPct'), savedPct = $('savedPct'), bar = $('bar');
+const scoreDetails = $('scoreDetails');
 const btnCam = $('btnCam') as HTMLButtonElement, btnCal = $('btnCal') as HTMLButtonElement;
 const btnGo = $('btnGo') as HTMLButtonElement, btnReset = $('btnReset') as HTMLButtonElement;
 const nameInput = $('name') as HTMLInputElement, zipPreview = $('zipPreview');
@@ -138,64 +139,59 @@ function onFrame(f: FrameInfo) {
     if (noPersonSince === null) noPersonSince = performance.now();
     if (state === 'compressing' || state === 'extracting' || state === 'calibrating') {
       warnEl.textContent = '⚠ NO SUBJECT — show yourself, any framing works';
+      scoreDetails.textContent = 'TRACKING: paused — subject not found';
+      holdStart = null;
     }
     return;
   }
   noPersonSince = null;
 
-  // Ignore tiny, noisy detections. Walking away from the camera must pause the
-  // run instead of being counted as an implausibly perfect compression.
-  if (baselineFrac > 0 && f.personFrac < baselineFrac * 0.25) {
+  const feat = poseFeatures(f.landmarks);
+
+  if (state === 'calibrating') {
+    if (!feat.ok || feat.coverage === 'head' || f.personFrac <= 0.015) {
+      scoreDetails.textContent = 'CALIBRATING: show shoulders and arms clearly';
+      return;
+    }
+    calSamples.push(f.personFrac);
+    if (f.thumb) calThumbs.push(f.thumb.data);
+    if (f.landmarks) {
+      calPoses.push(f.landmarks);
+      calPoseScore.push(feat.validJoints);
+      if (feat.ok && feat.scaleRef > 0) calScales.push(feat.scaleRef);
+    }
+    scoreDetails.textContent = `CALIBRATING: stable tracking ${Math.min(100, Math.round(calSamples.length / 15 * 100))}%`;
+    return;
+  }
+  if (!baselineFrac) return;
+
+  const scaleRatio = baselineScale > 0 ? feat.scaleRef / baselineScale : 1;
+  const areaRatio = f.personFrac / baselineFrac;
+  if (!feat.ok || feat.coverage === 'head' || scaleRatio < 0.78 || scaleRatio > 1.28 || areaRatio < 0.2) {
     if (state === 'compressing') {
-      warnEl.textContent = '⚠ SUBJECT TOO FAR AWAY — return to the marker (paused)';
+      warnEl.textContent = scaleRatio < 0.78 || areaRatio < 0.2
+        ? '⚠ SUBJECT TOO FAR AWAY — return to the marker (paused)'
+        : scaleRatio > 1.28
+          ? '⚠ TOO CLOSE — step back to the marker (paused)'
+          : '⚠ TRACKING UNSTABLE — show shoulders and arms (paused)';
+      scoreDetails.textContent = 'TRACKING: paused — score held';
       holdStart = null;
     }
     return;
   }
 
-  // smooth
-  emaFrac = ema(emaFrac, f.personFrac, 0.2);
-
-  if (state === 'calibrating') {
-    calSamples.push(f.personFrac);
-    if (f.thumb) calThumbs.push(f.thumb.data);
-    if (f.landmarks) {
-      calPoses.push(f.landmarks);
-      const feat = poseFeatures(f.landmarks);
-      calPoseScore.push(feat.validJoints);
-      if (feat.ok && feat.scaleRef > 0) calScales.push(feat.scaleRef);
-    }
-    return;
-  }
-  if (!baselineFrac) return;
-
-  const ratio = emaFrac / baselineFrac;
-  const clamped = Math.max(0.05, Math.min(1.5, ratio));
+  const progress = baselineFeat ? compressionProgress(baselineFeat, feat, areaRatio) : null;
+  if (!progress) return;
+  const smoothProgress = ema(emaFrac, progress.combined, 0.18);
+  emaFrac = smoothProgress;
+  const clamped = Math.max(0.3, Math.min(1, 1 - smoothProgress * 0.7));
   const saved = Math.max(0, 1 - clamped);
 
   bigPct.textContent = `${Math.round(clamped * 100)}%`;
   savedPct.textContent = `saved ${Math.round(saved * 100)}%`;
   bar.style.width = `${Math.round(saved * 100)}%`;
-
-  // moved-distance guard (strict for full body, lenient for partial framing)
-  if (f.landmarks) {
-    const feat = poseFeatures(f.landmarks);
-    if (feat.ok && feat.scaleRef > 0 && baselineScale > 0) {
-      const drift = feat.scaleRef / baselineScale;
-      const strict = baselineCoverage === 'full';
-      if (strict ? drift < 0.85 : drift < 0.8) {
-        warnEl.textContent = strict
-          ? '⚠ SUBJECT MOVED BACK — step forward to your marker (paused)'
-          : '⚠ DRIFTING FAR — come a little closer (paused)';
-        holdStart = null; partHoldStart = null;
-        return;
-      } else if (strict ? drift > 1.3 : drift > 1.7) {
-        warnEl.textContent = '⚠ TOO CLOSE — step back to your marker (paused)';
-        holdStart = null; partHoldStart = null;
-        return;
-      } else warnEl.textContent = '';
-    }
-  }
+  scoreDetails.textContent = `TRACKING: locked · fold ${Math.round(progress.folding * 100)}% · silhouette ${Math.round(progress.silhouette * 100)}%`;
+  warnEl.textContent = '';
 
   if (state === 'compressing') compressTick(clamped, saved);
   if (state === 'extracting' && extracting) extractTick();
@@ -337,8 +333,8 @@ btnCam.onclick = async () => {
   engine!.start();
   camLabel.textContent = '/dev/human0 — live';
   btnCam.textContent = '● CAMERA LIVE';
-  logLine(logEl, 'camera live. show yourself — full body, torso, or just your head.', 'text-green-300');
-  logLine(logEl, 'next: CALIBRATE 100% (hold still, any framing)', 'text-zinc-400');
+  logLine(logEl, 'camera live. show your shoulders and arms; full body also works.', 'text-green-300');
+  logLine(logEl, 'next: CALIBRATE 100% (hold still at this distance)', 'text-zinc-400');
   setState('ready');
 };
 
@@ -347,14 +343,14 @@ btnCal.onclick = () => {
   setState('calibrating');
   calSamples = []; calPoses = []; calPoseScore = []; calScales = []; calThumbs = [];
   emaFrac = NaN;
-  logLine(logEl, 'ANALYZING SUBJECT... show yourself, full or partial body. 3s...', 'text-amber-300');
+  logLine(logEl, 'ANALYZING SUBJECT... hold still with shoulders and arms visible. 3s...', 'text-amber-300');
   cueEl.textContent = 'SHOW YOURSELF — HOLD STILL — 3…';
   let n = 3;
   calTimer = setInterval(() => {
     n--;
     if (n > 0) { cueEl.textContent = `HOLD STILL — ${n}…`; return; }
     clearInterval(calTimer);
-    if (calSamples.length < 10) {
+    if (calSamples.length < 15) {
       startAfterCalibration = false;
       logLine(logEl, 'calibration failed — no subject. try better light / move into frame.', 'text-red-400');
       setState('ready');
@@ -384,7 +380,7 @@ btnCal.onclick = () => {
     const covLabel = baselineCoverage === 'full' ? 'full body'
       : baselineCoverage === 'upper' ? 'upper body'
       : baselineCoverage === 'head' ? 'head/shoulders' : 'subject';
-    emaFrac = baselineFrac;
+    emaFrac = 0;
     bestRatio = 1;
     bigPct.textContent = '100%'; savedPct.textContent = 'saved 0%'; bar.style.width = '0%';
     logLine(logEl, `Original subject = 100% (${covLabel}, ${lastFrame?.fromMask ? 'mask' : 'bbox'})`, 'text-green-300');
@@ -408,6 +404,7 @@ function startCompression() {
   ghostPhoto.classList.add('hidden');
   btnManualDone.classList.add('hidden');
   bestRatio = 1; holdStart = null; lastMilestone = 0; lastCueT = 0; cueCycle = 0;
+  emaFrac = 0;
   timeLeft = spec.timeSec;
   runStart = Date.now();
   logLine(logEl, `> zip -9 ${zip} HUMAN  (method: ${spec.label})`, 'text-zinc-300');

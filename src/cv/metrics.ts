@@ -34,7 +34,7 @@ export const IDX = {
 export type Coverage = 'full' | 'upper' | 'head' | 'none';
 
 export function inFrame(p: Pt | undefined): boolean {
-  return !!p && p.x >= -0.05 && p.x <= 1.05 && p.y >= -0.05 && p.y <= 1.05;
+  return !!p && (p.v ?? 1) >= 0.4 && p.x >= -0.05 && p.x <= 1.05 && p.y >= -0.05 && p.y <= 1.05;
 }
 
 export const KEY_JOINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
@@ -101,6 +101,46 @@ export function poseFeatures(lm: Pt[] | null): PoseFeatures {
       bboxArea,
     };
   } catch { return bad; }
+}
+
+export interface CompressionProgress {
+  folding: number;
+  silhouette: number;
+  combined: number;
+}
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+/**
+ * Scores intentional body folding independently from the visible footprint.
+ * Both inputs are relative to the calibrated pose, so raw camera area is never
+ * used as the whole compression score.
+ */
+export function compressionProgress(
+  baseline: PoseFeatures,
+  current: PoseFeatures,
+  silhouetteRatio: number,
+): CompressionProgress {
+  const foldingSignals: number[] = [];
+  if (baseline.hasArms && current.hasArms && baseline.elbowSpread > 0.2) {
+    foldingSignals.push(clamp01((1 - current.elbowSpread / baseline.elbowSpread) / 0.5));
+  }
+  if (baseline.hasLegs && current.hasLegs) {
+    const baseKnee = Math.min(baseline.kneeAngleL, baseline.kneeAngleR);
+    const currentKnee = Math.min(current.kneeAngleL, current.kneeAngleR);
+    foldingSignals.push(clamp01((baseKnee - currentKnee) / 70));
+  }
+  if (baseline.hasTorso && current.hasTorso && baseline.torsoH > 0.02) {
+    foldingSignals.push(clamp01((1 - current.torsoH / baseline.torsoH) / 0.22));
+  }
+  if (baseline.shoulderW > 0.02 && current.shoulderW > 0.01) {
+    foldingSignals.push(clamp01((1 - current.shoulderW / baseline.shoulderW) / 0.4));
+  }
+  const folding = foldingSignals.length
+    ? foldingSignals.reduce((sum, value) => sum + value, 0) / foldingSignals.length
+    : 0;
+  const silhouette = clamp01((1 - silhouetteRatio) / 0.5);
+  return { folding, silhouette, combined: folding * 0.5 + silhouette * 0.5 };
 }
 
 // ---- normalization + extract scoring (partial-body aware) ----
