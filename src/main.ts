@@ -306,20 +306,10 @@ btnCam.onclick = async () => {
   btnCam.disabled = true;
   btnCam.textContent = '◌ WORKING...';
   logLine(logEl, '> physical_zip --scan HUMAN', 'text-zinc-400');
-  // stage 1: models (CDN download on first run)
+  // Start the camera and model loading together so the user gets an immediate preview.
+  logLine(logEl, 'opening camera while tracking loads...', 'text-zinc-500');
+  const modelPromise = ensureEngine();
   try {
-    logLine(logEl, 'loading vision models (first run downloads ~8MB)...', 'text-zinc-500');
-    await ensureEngine();
-    logLine(logEl, 'models ready.', 'text-green-300');
-  } catch (e) {
-    logLine(logEl, `model load failed: ${describeError(e)} — check connection / allow cdn.jsdelivr.net + storage.googleapis.com (adblock?), then retry.`, 'text-red-400');
-    btnCam.disabled = false;
-    btnCam.textContent = '▶ RETRY (MODELS)';
-    return;
-  }
-  // stage 2: camera
-  try {
-    logLine(logEl, 'requesting camera permission...', 'text-zinc-500');
     await engine!.startCamera();
   } catch (e) {
     logLine(logEl, `camera failed: ${describeError(e)}${cameraHint(e)}`, 'text-red-400');
@@ -330,9 +320,18 @@ btnCam.onclick = async () => {
   camOn = true;
   fitCanvas();
   requestAnimationFrame(fitCanvas);
-  engine!.start();
   camLabel.textContent = '/dev/human0 — live';
   btnCam.textContent = '● CAMERA LIVE';
+  logLine(logEl, 'camera live. preparing tracking...', 'text-green-300');
+  try {
+    await modelPromise;
+    logLine(logEl, 'tracking ready.', 'text-green-300');
+  } catch (e) {
+    logLine(logEl, `model load failed: ${describeError(e)} — check connection / allow cdn.jsdelivr.net + storage.googleapis.com (adblock?), then retry.`, 'text-red-400');
+    btnCam.textContent = '● CAMERA LIVE — RETRY TRACKING';
+    return;
+  }
+  engine!.start();
   logLine(logEl, 'camera live. show your shoulders and arms; full body also works.', 'text-green-300');
   logLine(logEl, 'next: CALIBRATE 100% (hold still at this distance)', 'text-zinc-400');
   setState('ready');

@@ -37,9 +37,16 @@ export class CVEngine {
   maskOK = false;
   running = false;
   private raf = 0;
-  private lastT = 0;
+  private lastPoseT = 0;
+  private lastSegT = 0;
   private lastFpsT = performance.now();
   private frames = 0;
+  private latestLandmarks: Pt[] | null = null;
+  private latestPersonFrac = 0;
+  private latestFromMask = false;
+  private latestSegW = 0;
+  private latestSegH = 0;
+  private latestThumb: MaskThumb | null = null;
   fps = 0;
   onFrame: (f: FrameInfo) => void = () => {};
   onStatus: (s: string) => void = () => {};
@@ -105,7 +112,7 @@ export class CVEngine {
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        video: { width: { ideal: 480 }, height: { ideal: 360 }, facingMode: 'user' },
         audio: false,
       });
     } catch (e: any) {
@@ -140,73 +147,73 @@ export class CVEngine {
   start() {
     if (this.running) return;
     this.running = true;
-    this.lastT = 0;
+    this.lastPoseT = 0;
+    this.lastSegT = 0;
     const loop = () => {
       if (!this.running) return;
       this.raf = requestAnimationFrame(loop);
       const now = performance.now();
-      if (now - this.lastT < 66) return; // ~15fps
       if (this.video.readyState < 2 || this.video.videoWidth === 0) return;
-      this.lastT = now;
-      this.frames++;
-      if (now - this.lastFpsT > 1000) { this.fps = this.frames; this.frames = 0; this.lastFpsT = now; }
-      this.process(now);
+      const didProcess = this.process(now);
+      if (didProcess) {
+        this.frames++;
+        if (now - this.lastFpsT > 1000) { this.fps = this.frames; this.frames = 0; this.lastFpsT = now; }
+      }
     };
     loop();
   }
 
   stop() { this.running = false; cancelAnimationFrame(this.raf); }
 
-  private process(now: number) {
-    let landmarks: Pt[] | null = null;
-    let hasPerson = false;
-    try {
-      if (this.pose) {
+  private process(now: number): boolean {
+    const runPose = now - this.lastPoseT >= 100; // 10 fps: responsive without blocking the page
+    const runSegmentation = now - this.lastSegT >= 250; // mask inference is much heavier
+    if (!runPose && !runSegmentation) return false;
+
+    if (runPose) {
+      this.lastPoseT = now;
+      try {
+        if (this.pose) {
         const r = this.pose.detectForVideo(this.video, now);
         const lm = r.landmarks?.[0] as any;
         if (lm && lm.length >= 29) {
-          landmarks = lm.map((p: any) => ({ x: p.x, y: p.y, v: p.visibility ?? 1 }));
-          const f = poseFeatures(landmarks);
-          hasPerson = f.ok;
+          this.latestLandmarks = lm.map((p: any) => ({ x: p.x, y: p.y, v: p.visibility ?? 1 }));
+        } else this.latestLandmarks = null;
         }
-      }
-    } catch (e) { console.warn('pose err', e); }
+      } catch (e) { console.warn('pose err', e); }
+    }
 
-    let personFrac = 0;
-    let fromMask = false;
-    let segW = 0, segH = 0;
-    let thumb: MaskThumb | null = null;
-    if (this.segmenter && this.maskOK) {
+    if (runSegmentation && this.segmenter && this.maskOK) {
+      this.lastSegT = now;
       try {
         const r = this.segmenter.segmentForVideo(this.video, now);
         const mask: any = (r as any).categoryMask;
         if (mask) {
-          segW = mask.width; segH = mask.height;
+          this.latestSegW = mask.width; this.latestSegH = mask.height;
           let arr: ArrayLike<number> | null = null;
           try {
             arr = mask.getAsUint8Array();
           } catch {
             try { arr = (mask as any).getAsFloat32Array(); } catch { arr = null; }
           }
-          if (!arr) return;
+          if (!arr) return true;
           let c = 0;
           // sample every 2nd pixel for speed (ratio unaffected)
           for (let i = 0; i < arr.length; i += 2) if (arr[i] !== 0) c++;
-          personFrac = (c * 2) / arr.length;
-          fromMask = true;
+          this.latestPersonFrac = (c * 2) / arr.length;
+          this.latestFromMask = true;
           // downsampled binary silhouette thumbnail
           const td = new Uint8Array(THUMB_W * THUMB_H);
           for (let ty = 0; ty < THUMB_H; ty++) {
-            const sy = Math.min(segH - 1, (ty * segH / THUMB_H) | 0);
+            const sy = Math.min(this.latestSegH - 1, (ty * this.latestSegH / THUMB_H) | 0);
             for (let tx = 0; tx < THUMB_W; tx++) {
-              const sx = Math.min(segW - 1, (tx * segW / THUMB_W) | 0);
-              td[ty * THUMB_W + tx] = arr[sy * segW + sx] !== 0 ? 1 : 0;
+              const sx = Math.min(this.latestSegW - 1, (tx * this.latestSegW / THUMB_W) | 0);
+              td[ty * THUMB_W + tx] = arr[sy * this.latestSegW + sx] !== 0 ? 1 : 0;
             }
           }
-          thumb = { w: THUMB_W, h: THUMB_H, data: td };
+          this.latestThumb = { w: THUMB_W, h: THUMB_H, data: td };
           try { mask.close?.(); } catch {}
           try { (r as any).close?.(); } catch {}
-          if (personFrac > 0.015) hasPerson = true;
         }
       } catch (e) { console.warn('seg err', e); }
     }
@@ -215,15 +222,16 @@ export class CVEngine {
     // partial framing. In that case use the pose bounding box for both detection
     // and size measurement; otherwise calibration can record a zero baseline and
     // leave START COMPRESSION disabled.
-    const maskIsUsable = fromMask && personFrac > 0.015;
-    if (!maskIsUsable && landmarks) {
-      const f = poseFeatures(landmarks);
-      personFrac = f.ok ? Math.max(0.015, f.bboxArea) : 0;
+    const landmarks = this.latestLandmarks;
+    const pose = poseFeatures(landmarks);
+    let personFrac = this.latestPersonFrac;
+    let fromMask = this.latestFromMask;
+    if (!(fromMask && personFrac > 0.015) && pose.ok) {
+      personFrac = Math.max(0.015, pose.bboxArea);
       fromMask = false;
-      if (f.ok && personFrac > 0.008) hasPerson = true;
-      segW = 0; segH = 0;
     }
-
-    this.onFrame({ personFrac, fromMask, segW, segH, thumb, landmarks, hasPerson, fps: this.fps });
+    const hasPerson = pose.ok || personFrac > 0.015;
+    this.onFrame({ personFrac, fromMask, segW: this.latestSegW, segH: this.latestSegH, thumb: this.latestThumb, landmarks, hasPerson, fps: this.fps });
+    return true;
   }
 }
