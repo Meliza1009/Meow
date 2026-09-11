@@ -63,12 +63,49 @@ export class CVEngine {
   }
 
   async startCamera(): Promise<void> {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-      audio: false,
-    });
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const ctx = window.isSecureContext ? '' : ' (page is not a secure context — camera requires HTTPS)';
+      throw new Error(`camera API unavailable in this browser${ctx}`);
+    }
+    // property assignments (not just attributes) so autoplay policies accept play()
+    this.video.muted = true;
+    this.video.playsInline = true;
+    this.video.setAttribute('playsinline', '');
+    this.video.setAttribute('muted', '');
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        audio: false,
+      });
+    } catch (e: any) {
+      if (e?.name === 'OverconstrainedError' || e?.name === 'ConstraintNotSatisfiedError') {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      } else throw e;
+    }
     this.video.srcObject = stream;
-    await this.video.play();
+    try {
+      await this.video.play();
+    } catch (e: any) {
+      const me = this.video.error as any;
+      const suffix = me && typeof me.code === 'number'
+        ? ` (media error code ${me.code}${me.message ? ': ' + me.message : ''})`
+        : '';
+      stream.getTracks().forEach(t => t.stop());
+      this.video.srcObject = null;
+      throw new Error(`video.play failed${suffix}: ${e?.name ? `[${e.name}] ` : ''}${e?.message ?? e}`);
+    }
+    // confirm frames are actually flowing (catches killed/black tracks)
+    await new Promise<void>((resolve, reject) => {
+      if (this.video.readyState >= 2 && this.video.videoWidth > 0) return resolve();
+      const to = window.setTimeout(() => reject(new Error('camera stream opened but no frames arrived (track ended?)')), 8000);
+      const iv = window.setInterval(() => {
+        if (this.video.readyState >= 2 && this.video.videoWidth > 0) {
+          window.clearTimeout(to); window.clearInterval(iv); resolve();
+        }
+      }, 200);
+    });
   }
 
   start() {

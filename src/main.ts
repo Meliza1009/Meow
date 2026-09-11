@@ -3,7 +3,7 @@ import { CVEngine, type FrameInfo } from './cv/engine';
 import { ema, poseFeatures, scoreParts, IDX, type Pt } from './cv/metrics';
 import { METHODS, sanitizeName, type MethodId } from './coach/methods';
 import { pickCue, milestoneLog } from './coach/rules';
-import { logLine, blip } from './ui/terminal';
+import { logLine, blip, describeError, cameraHint } from './ui/terminal';
 import { downloadCert, snapshotVideo } from './zip/cert';
 
 // surface boot/runtime errors in-page instead of silent black screen
@@ -237,28 +237,50 @@ async function ensureEngine() {
   engine = new CVEngine(video);
   engine.onStatus = (s) => { engineStatus.textContent = s; };
   engine.onFrame = onFrame;
-  await engine.init();
+  try {
+    await engine.init();
+  } catch (e) {
+    engine = null; // allow clean retry
+    throw e;
+  }
   modelsReady = true;
   setState(state);
 }
 
 btnCam.onclick = async () => {
   btnCam.disabled = true;
+  btnCam.textContent = '◌ WORKING...';
   logLine(logEl, '> physical_zip --scan HUMAN', 'text-zinc-400');
+  // stage 1: models (CDN download on first run)
   try {
+    logLine(logEl, 'loading vision models (first run downloads ~8MB)...', 'text-zinc-500');
     await ensureEngine();
-    await engine!.startCamera();
-    camOn = true;
-    fitCanvas();
-    engine!.start();
-    camLabel.textContent = '/dev/human0 — live';
-    logLine(logEl, 'camera live. models ready. stand back, full body in frame.', 'text-green-300');
-    logLine(logEl, 'next: CALIBRATE 100% (stand tall, arms slightly out)', 'text-zinc-400');
-    setState('ready');
-  } catch (e: any) {
-    logLine(logEl, 'camera failed: ' + (e?.message || e) + ' — allow camera + use HTTPS (Vercel).', 'text-red-400');
+    logLine(logEl, 'models ready.', 'text-green-300');
+  } catch (e) {
+    logLine(logEl, `model load failed: ${describeError(e)} — check connection / allow cdn.jsdelivr.net + storage.googleapis.com (adblock?), then retry.`, 'text-red-400');
     btnCam.disabled = false;
+    btnCam.textContent = '▶ RETRY (MODELS)';
+    return;
   }
+  // stage 2: camera
+  try {
+    logLine(logEl, 'requesting camera permission...', 'text-zinc-500');
+    await engine!.startCamera();
+  } catch (e) {
+    logLine(logEl, `camera failed: ${describeError(e)}${cameraHint(e)}`, 'text-red-400');
+    btnCam.disabled = false;
+    btnCam.textContent = '▶ RETRY CAMERA';
+    return;
+  }
+  camOn = true;
+  fitCanvas();
+  requestAnimationFrame(fitCanvas);
+  engine!.start();
+  camLabel.textContent = '/dev/human0 — live';
+  btnCam.textContent = '● CAMERA LIVE';
+  logLine(logEl, 'camera live. stand back, full body in frame.', 'text-green-300');
+  logLine(logEl, 'next: CALIBRATE 100% (stand tall, arms slightly out)', 'text-zinc-400');
+  setState('ready');
 };
 
 btnCal.onclick = () => {

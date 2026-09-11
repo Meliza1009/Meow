@@ -8,6 +8,46 @@ export function logLine(el: HTMLElement, msg: string, cls = 'text-green-400') {
   while (el.children.length > 220) el.removeChild(el.firstChild!);
 }
 
+export function describeError(e: any): string {
+  if (e == null) return 'unknown error';
+  if (typeof e === 'string') return e;
+  // DOM Event as rejection reason (e.g. media element error) — never stringify raw
+  if (typeof Event !== 'undefined' && e instanceof Event) {
+    const t = e.target as any;
+    if (t?.error && typeof t.error.code === 'number') {
+      const tag = t.tagName ? `<${String(t.tagName).toLowerCase()}>` : 'media element';
+      return `${e.type || 'error'} event on ${tag} (media error code ${t.error.code}${t.error.message ? ': ' + t.error.message : ''})`;
+    }
+    const tag = t?.tagName ? `<${String(t.tagName).toLowerCase()}>` : 'unknown target';
+    return `${e.type || 'error'} event on ${tag}`;
+  }
+  // MediaError {code, message}
+  if (typeof e?.code === 'number' && !e?.message && e?.MEDIA_ERR_ABORTED !== undefined)
+    return `media error code ${e.code}`;
+  const name = e?.name ? `[${e.name}] ` : '';
+  const msg = e?.message ?? String(e);
+  return `${name}${msg}`;
+}
+
+export function cameraHint(e: any): string {
+  switch (e?.name) {
+    case 'NotAllowedError':
+      return ' — permission denied. Allow the camera via the lock icon in the address bar, check OS privacy settings, then RETRY.';
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      return ' — no camera found on this device/browser.';
+    case 'NotReadableError':
+    case 'TrackStartError':
+      return ' — camera is busy (close Zoom/Teams/other tabs using it) then RETRY.';
+    case 'OverconstrainedError':
+    case 'ConstraintNotSatisfiedError':
+      return ' — camera rejected the requested mode; retrying with defaults...';
+    case 'SecurityError':
+      return ' — camera needs HTTPS. Open the https://....vercel.app URL directly.';
+    default:
+      return ' — allow camera + use HTTPS (Vercel).';
+  }
+}
 let ctx: AudioContext | null = null;
 export function blip(freq = 660, dur = 0.07) {
   try {
