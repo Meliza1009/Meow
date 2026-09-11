@@ -11,7 +11,7 @@ export function logLine(el: HTMLElement, msg: string, cls = 'text-green-400') {
 export function describeError(e: any): string {
   if (e == null) return 'unknown error';
   if (typeof e === 'string') return e;
-  // DOM Event as rejection reason (e.g. media element error) — never stringify raw
+  // DOM Event as rejection reason (e.g. media element error) - never stringify raw
   if (typeof Event !== 'undefined' && e instanceof Event) {
     const t = e.target as any;
     if (t?.error && typeof t.error.code === 'number') {
@@ -32,20 +32,20 @@ export function describeError(e: any): string {
 export function cameraHint(e: any): string {
   switch (e?.name) {
     case 'NotAllowedError':
-      return ' — permission denied. Allow the camera via the lock icon in the address bar, check OS privacy settings, then RETRY.';
+      return ' - permission denied. Allow the camera via the lock icon in the address bar, check OS privacy settings, then RETRY.';
     case 'NotFoundError':
     case 'DevicesNotFoundError':
-      return ' — no camera found on this device/browser.';
+      return ' - no camera found on this device/browser.';
     case 'NotReadableError':
     case 'TrackStartError':
-      return ' — camera is busy (close Zoom/Teams/other tabs using it) then RETRY.';
+      return ' - camera is busy (close Zoom/Teams/other tabs using it) then RETRY.';
     case 'OverconstrainedError':
     case 'ConstraintNotSatisfiedError':
-      return ' — camera rejected the requested mode; retrying with defaults...';
+      return ' - camera rejected the requested mode; retrying with defaults...';
     case 'SecurityError':
-      return ' — camera needs HTTPS. Open the https://....vercel.app URL directly.';
+      return ' - camera needs HTTPS. Open the https://....vercel.app URL directly.';
     default:
-      return ' — allow camera + use HTTPS (Vercel).';
+      return ' - allow camera + use HTTPS (Vercel).';
   }
 }
 let ctx: AudioContext | null = null;

@@ -1,4 +1,6 @@
-import './style.css';
+import './machine.css';
+import './demo.css';
+import { initIntro } from './ui/intro';
 import { CVEngine, THUMB_W, THUMB_H, type FrameInfo, type MaskThumb } from './cv/engine';
 import { ema, poseFeatures, compressionProgress, scoreAvailableParts, maskIoU, type Pt, type Coverage } from './cv/metrics';
 import { METHODS, sanitizeName, type MethodId } from './coach/methods';
@@ -93,6 +95,9 @@ let currentRecord: GameRecord | null = null;
 // ---------- helpers ----------
 function setState(s: State) {
   state = s;
+  document.body.dataset.gameState = s;
+  document.getElementById('cameraStage')!.dataset.live = String(camOn);
+  (document.getElementById('replayIntro') as HTMLButtonElement).disabled = camOn;
   modeLabel.textContent = 'MODE: ' + s.toUpperCase();
   btnCal.disabled = !(camOn && modelsReady && (s === 'idle' || s === 'ready'));
   btnCal.classList.toggle('opacity-40', btnCal.disabled);
@@ -122,7 +127,10 @@ function drawSkeleton(lm: Pt[], color: string, width = 3, alpha = 1) {
   octx.globalAlpha = alpha;
   octx.strokeStyle = color; octx.lineWidth = width;
   octx.lineCap = 'round';
-  const W = overlay.width, H = overlay.height;
+  const scale = Math.min(overlay.width / (video.videoWidth || overlay.width), overlay.height / (video.videoHeight || overlay.height));
+  const W = (video.videoWidth || overlay.width) * scale, H = (video.videoHeight || overlay.height) * scale;
+  const offsetX = (overlay.width - W) / 2, offsetY = (overlay.height - H) / 2;
+  octx.translate(offsetX, offsetY);
   octx.beginPath();
   for (const [a, b] of SKELETON) {
     if (!lm[a] || !lm[b]) continue;
@@ -142,8 +150,8 @@ function drawSkeleton(lm: Pt[], color: string, width = 3, alpha = 1) {
 
 function render() {
   octx.clearRect(0, 0, overlay.width, overlay.height);
-  if (extracting && extractMode === 'pose' && baselinePose) drawSkeleton(baselinePose, '#22c55e', 5, 0.35);
-  if (lastLandmarks) drawSkeleton(lastLandmarks, extracting ? '#ffffff' : '#4ade80', 3, 1);
+  if (extracting && extractMode === 'pose' && baselinePose) drawSkeleton(baselinePose, '#F2C94C', 5, 0.35);
+  if (lastLandmarks) drawSkeleton(lastLandmarks, extracting ? '#ffffff' : '#F2C94C', 3, 1);
 }
 
 // ---------- frame handling ----------
@@ -156,8 +164,8 @@ function onFrame(f: FrameInfo) {
   if (!f.hasPerson) {
     if (noPersonSince === null) noPersonSince = performance.now();
     if (state === 'compressing' || state === 'extracting' || state === 'calibrating') {
-      warnEl.textContent = '⚠ NO SUBJECT — show yourself, any framing works';
-      scoreDetails.textContent = 'TRACKING: paused — subject not found';
+      warnEl.textContent = 'No subject found. Show your shoulders and arms.';
+      scoreDetails.textContent = 'TRACKING: paused - subject not found';
       holdStart = null;
       pbCandidateStart = null;
       lastValidFrameAt = 0;
@@ -191,11 +199,11 @@ function onFrame(f: FrameInfo) {
   if (!feat.ok || feat.coverage === 'head' || scaleRatio < 0.78 || scaleRatio > 1.28 || areaRatio < 0.2) {
     if (state === 'compressing') {
       warnEl.textContent = scaleRatio < 0.78 || areaRatio < 0.2
-        ? '⚠ SUBJECT TOO FAR AWAY — return to the marker (paused)'
+        ? '⚠ SUBJECT TOO FAR AWAY - return to the marker (paused)'
         : scaleRatio > 1.28
-          ? '⚠ TOO CLOSE — step back to the marker (paused)'
-          : '⚠ TRACKING UNSTABLE — show shoulders and arms (paused)';
-      scoreDetails.textContent = 'TRACKING: paused — score held';
+          ? '⚠ TOO CLOSE - step back to the marker (paused)'
+          : '⚠ TRACKING UNSTABLE - show shoulders and arms (paused)';
+      scoreDetails.textContent = 'TRACKING: paused - score held';
       holdStart = null;
       pbCandidateStart = null;
       lastValidFrameAt = 0;
@@ -229,9 +237,9 @@ function onFrame(f: FrameInfo) {
     if (timeLeft <= 0 && state === 'compressing') {
       if (gameMode === 'personal-best') finishCompress(pbQualified);
       else {
-        logLine(logEl, `TIMEOUT — best was ${Math.round(bestRatio * 100)}%. press START COMPRESSION to retry.`, 'text-red-400');
+        logLine(logEl, `TIMEOUT - best was ${Math.round(bestRatio * 100)}%. press START COMPRESSION to retry.`, 'text-red-400');
         setState('ready');
-        cueEl.textContent = 'TIMEOUT — retry, you can beat it.';
+        cueEl.textContent = 'TIMEOUT - retry, you can beat it.';
         timerEl.textContent = 'READY';
       }
     }
@@ -247,7 +255,7 @@ function personalBestTick(ratio: number) {
     pbCandidateStart = now;
   } else if (pbCandidateStart && ratio <= pbCandidate + 0.03) {
     const held = (now - pbCandidateStart) / 1000;
-    cueEl.textContent = held < 2 ? `HOLD SCORE — ${(2 - held).toFixed(1)}s` : 'SCORE LOCKED — go smaller';
+    cueEl.textContent = held < 2 ? `HOLD SCORE - ${(2 - held).toFixed(1)}s` : 'SCORE LOCKED - go smaller';
     if (held >= 2 && pbCandidate < pbQualified) {
       pbQualified = pbCandidate;
       pbPhoto = snapshotVideo(video, facing === 'user');
@@ -286,11 +294,11 @@ function compressTick(ratio: number, saved: number) {
   if (ratio <= spec.targetSize) {
     if (holdStart === null) {
       holdStart = now;
-      logLine(logEl, `TARGET ${Math.round(spec.targetSize * 100)}% REACHED — HOLD IT...`, 'text-amber-300');
+      logLine(logEl, `TARGET ${Math.round(spec.targetSize * 100)}% REACHED - HOLD IT...`, 'text-amber-300');
       blip(880);
     }
     const held = (now - holdStart) / 1000;
-    cueEl.textContent = `HOLD IT — ${(spec.holdSec - held).toFixed(1)}s  (${Math.round(ratio * 100)}%)`;
+    cueEl.textContent = `HOLD IT - ${(spec.holdSec - held).toFixed(1)}s  (${Math.round(ratio * 100)}%)`;
     if (held >= spec.holdSec) finishCompress(ratio);
   } else holdStart = null;
 }
@@ -304,15 +312,15 @@ function extractTick() {
     const d = document.createElement('div');
     const ok = iou > 0.85;
     d.className = ok ? 'text-green-400' : 'text-amber-300';
-    d.textContent = `${ok ? '✓' : '…'} Restoring silhouette — ${Math.round(iou * 100)}%`;
+    d.textContent = `${ok ? '✓' : '…'} Restoring silhouette - ${Math.round(iou * 100)}%`;
     partsEl.appendChild(d);
     if (ok) {
       if (partHoldStart === null) {
         partHoldStart = performance.now();
-        logLine(logEl, 'silhouette aligned — HOLD...', 'text-amber-300');
+        logLine(logEl, 'silhouette aligned - HOLD...', 'text-amber-300');
       }
       const held = (performance.now() - partHoldStart) / 1000;
-      cueEl.textContent = `HOLD RESTORE — ${(2 - held).toFixed(1)}s`;
+      cueEl.textContent = `HOLD RESTORE - ${(2 - held).toFixed(1)}s`;
       if (held >= 2) finishExtract();
     } else partHoldStart = null;
     return;
@@ -336,16 +344,16 @@ function extractTick() {
     if (!ok) allOk = false;
     const d = document.createElement('div');
     d.className = ok ? 'text-green-400' : 'text-amber-300';
-    d.textContent = `${ok ? '✓' : '…'} Restoring ${labels[k]} — ${Math.round(v * 100)}%`;
+    d.textContent = `${ok ? '✓' : '…'} Restoring ${labels[k]} - ${Math.round(v * 100)}%`;
     partsEl.appendChild(d);
   }
   if (allOk) {
     if (partHoldStart === null) {
       partHoldStart = performance.now();
-      logLine(logEl, 'all parts aligned — HOLD...', 'text-amber-300');
+      logLine(logEl, 'all parts aligned - HOLD...', 'text-amber-300');
     }
     const held = (performance.now() - partHoldStart) / 1000;
-    cueEl.textContent = `HOLD RESTORE — ${(2 - held).toFixed(1)}s`;
+    cueEl.textContent = `HOLD RESTORE - ${(2 - held).toFixed(1)}s`;
     if (held >= 2) finishExtract();
   } else partHoldStart = null;
 }
@@ -361,7 +369,7 @@ async function ensureEngine() {
       baselineFrac = 0; baselinePose = null; baselineFeat = null; baselinePhoto = null;
       setState('idle');
       timerEl.textContent = 'CAMERA LOST';
-      warnEl.textContent = '⚠ CAMERA STOPPED — reconnect and calibrate again';
+      warnEl.textContent = '⚠ CAMERA STOPPED - reconnect and calibrate again';
       btnCam.disabled = false; btnCam.textContent = '▶ RECONNECT CAMERA';
       btnFlip.classList.add('hidden'); btnStop.classList.add('hidden');
     };
@@ -396,11 +404,13 @@ async function startCamera() {
     return;
   }
   camOn = true;
+  cameraStage.dataset.live = 'true';
+  (document.getElementById('replayIntro') as HTMLButtonElement).disabled = true;
   cameraStage.dataset.facing = facing;
   if (video.videoWidth && video.videoHeight) cameraStage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
   fitCanvas();
   requestAnimationFrame(fitCanvas);
-  camLabel.textContent = '/dev/human0 — live';
+  camLabel.textContent = '/dev/human0 - live';
   btnCam.textContent = '● CAMERA LIVE';
   btnFlip.classList.remove('hidden'); btnStop.classList.remove('hidden');
   logLine(logEl, 'camera live. preparing tracking...', 'text-green-300');
@@ -408,7 +418,7 @@ async function startCamera() {
     await modelPromise;
     logLine(logEl, 'tracking ready.', 'text-green-300');
   } catch (e) {
-    logLine(logEl, `model load failed: ${describeError(e)} — check connection / allow cdn.jsdelivr.net + storage.googleapis.com (adblock?), then retry.`, 'text-red-400');
+    logLine(logEl, `model load failed: ${describeError(e)} - check connection / allow cdn.jsdelivr.net + storage.googleapis.com (adblock?), then retry.`, 'text-red-400');
     btnCam.textContent = '↻ RETRY TRACKING';
     btnCam.disabled = false;
     cameraBusy = false;
@@ -428,7 +438,7 @@ btnFlip.onclick = async () => {
   baselineFrac = 0; baselinePose = null; baselineFeat = null; baselinePhoto = null;
   logLine(logEl, `switching to ${facing === 'user' ? 'front' : 'rear'} camera...`, 'text-zinc-400');
   await startCamera();
-  cueEl.textContent = 'CAMERA SWITCHED — recalibrate before playing.';
+  cueEl.textContent = 'CAMERA SWITCHED - recalibrate before playing.';
 };
 
 btnStop.onclick = () => {
@@ -437,7 +447,7 @@ btnStop.onclick = () => {
   baselineFrac = 0; baselinePose = null; baselineFeat = null; baselinePhoto = null;
   btnCam.disabled = false; btnCam.textContent = '▶ START CAMERA';
   btnFlip.classList.add('hidden'); btnStop.classList.add('hidden');
-  camLabel.textContent = '/dev/human0 — no signal';
+  camLabel.textContent = '/dev/human0 - no signal';
   timerEl.textContent = 'READY'; setState('idle');
 };
 
@@ -447,16 +457,16 @@ btnCal.onclick = () => {
   calSamples = []; calPoses = []; calPoseScore = []; calScales = []; calThumbs = [];
   emaFrac = NaN;
   logLine(logEl, 'ANALYZING SUBJECT... hold still with shoulders and arms visible. 5s...', 'text-amber-300');
-  cueEl.textContent = 'SHOW YOURSELF — HOLD STILL — 5…';
+  cueEl.textContent = 'SHOW YOURSELF - HOLD STILL - 5…';
   let n = 5;
   timerEl.textContent = '5';
   calTimer = setInterval(() => {
     n--;
-    if (n > 0) { cueEl.textContent = `HOLD STILL — ${n}…`; timerEl.textContent = String(n); return; }
+    if (n > 0) { cueEl.textContent = `HOLD STILL - ${n}…`; timerEl.textContent = String(n); return; }
     clearInterval(calTimer);
     if (calSamples.length < 15) {
       startAfterCalibration = false;
-      logLine(logEl, 'calibration failed — no subject. try better light / move into frame.', 'text-red-400');
+      logLine(logEl, 'calibration failed - no subject. try better light / move into frame.', 'text-red-400');
       setState('ready');
       timerEl.textContent = 'READY';
       return;
@@ -489,7 +499,7 @@ btnCal.onclick = () => {
     bestRatio = 1;
     bigPct.textContent = '100%'; savedPct.textContent = 'saved 0%'; bar.style.width = '0%';
     logLine(logEl, `Original subject = 100% (${covLabel}, ${lastFrame?.fromMask ? 'mask' : 'bbox'})`, 'text-green-300');
-    cueEl.textContent = 'CALIBRATED — press START COMPRESSION and shrink.';
+    cueEl.textContent = 'CALIBRATED - press START COMPRESSION and shrink.';
     setState('ready');
     timerEl.textContent = 'READY';
     blip(740);
@@ -516,7 +526,7 @@ function startCompression() {
   timeLeft = gameMode === 'personal-best' ? 45 : spec.timeSec;
   currentRecord = null;
   logLine(logEl, gameMode === 'personal-best' ? `> physical_zip --personal-best ${zip}` : `> zip -9 ${zip} HUMAN  (method: ${spec.label})`, 'text-zinc-300');
-  logLine(logEl, gameMode === 'personal-best' ? '45s — hold a size for 2s to lock it' : `target: ${Math.round(spec.targetSize * 100)}% size — hold ${spec.holdSec}s — ${spec.timeSec}s limit`, 'text-amber-300');
+  logLine(logEl, gameMode === 'personal-best' ? '45s - hold a size for 2s to lock it' : `target: ${Math.round(spec.targetSize * 100)}% size - hold ${spec.holdSec}s - ${spec.timeSec}s limit`, 'text-amber-300');
   cueEl.textContent = 'SHRINK! elbows in, bend knees, crouch!';
   timerEl.textContent = `${timeLeft}s`;
 }
@@ -546,13 +556,12 @@ function finishCompress(ratio: number) {
   blip(990, 0.15);
   setTimeout(() => blip(1320, 0.2), 150);
   extractPanel.classList.remove('hidden');
-  terminalPanel.open = true;
   resultPanel.classList.remove('hidden');
   if (baselinePhoto && compressedSnapshot) {
     resultPhotos.classList.remove('hidden');
     originalPhoto.src = baselinePhoto;
     compressedPhoto.src = compressedSnapshot;
-    compressedCaption.textContent = `COMPRESSED — ${Math.round(ratio * 100)}%`;
+    compressedCaption.textContent = `COMPRESSED - ${Math.round(ratio * 100)}%`;
   } else resultPhotos.classList.add('hidden');
   const coverage = baselineCoverage === 'full' ? 'full' : 'upper';
   currentRecord = {
@@ -573,7 +582,7 @@ btnExtract.onclick = () => {
   if (baselinePose && poseKeys.length > 0) extractMode = 'pose';
   else if (baselineThumb) extractMode = 'silhouette';
   else if (baselinePhoto) extractMode = 'manual';
-  else { logLine(logEl, 'nothing saved to restore — calibrate first.', 'text-red-400'); return; }
+  else { logLine(logEl, 'nothing saved to restore - calibrate first.', 'text-red-400'); return; }
   setState('extracting');
   extracting = true;
   partHoldStart = null;
@@ -581,17 +590,17 @@ btnExtract.onclick = () => {
   if (extractMode === 'pose') {
     ghostPhoto.classList.add('hidden');
     btnManualDone.classList.add('hidden');
-    logLine(logEl, '> unzip human.zip — restoring... match the GREEN ghost.', 'text-amber-300');
-    cueEl.textContent = 'UNFOLD — match the green ghost skeleton!';
+    logLine(logEl, '> unzip human.zip - restoring... match the YELLOW ghost.', 'text-amber-300');
+    cueEl.textContent = 'UNFOLD - match the yellow ghost skeleton!';
   } else {
     if (baselinePhoto) { ghostPhoto.src = baselinePhoto; ghostPhoto.classList.remove('hidden'); }
     if (extractMode === 'silhouette') {
       btnManualDone.classList.add('hidden');
-      logLine(logEl, '> unzip human.zip — restoring... match the photo silhouette.', 'text-amber-300');
+      logLine(logEl, '> unzip human.zip - restoring... match the photo silhouette.', 'text-amber-300');
       cueEl.textContent = 'MOVE BACK INTO YOUR SAVED SILHOUETTE!';
     } else {
       btnManualDone.classList.remove('hidden');
-      logLine(logEl, '> unzip human.zip — no tracking data, match the photo by eye.', 'text-amber-300');
+      logLine(logEl, '> unzip human.zip - no tracking data, match the photo by eye.', 'text-amber-300');
       cueEl.textContent = 'MATCH THE PHOTO, then press ✓ I MATCH!';
     }
   }
@@ -695,6 +704,7 @@ document.querySelectorAll('.mbtn').forEach(b => {
       x.innerHTML = (x as HTMLElement).innerHTML.replace('◉', '○');
     });
     b.classList.add('active');
+    document.querySelectorAll('.mbtn').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
     b.innerHTML = b.innerHTML.replace('○', '◉');
     method = (b as HTMLElement).dataset.m as MethodId;
     methodDesc.textContent = METHODS[method].desc;
@@ -706,11 +716,12 @@ document.querySelectorAll<HTMLButtonElement>('.gmode').forEach(button => {
   button.onclick = () => {
     gameMode = button.dataset.mode as GameMode;
     document.querySelectorAll('.gmode').forEach(x => x.classList.toggle('active', x === button));
+    document.querySelectorAll('.gmode').forEach(x => x.setAttribute('aria-pressed', String(x === button)));
     methodsEl.classList.toggle('hidden', gameMode === 'personal-best');
     methodDesc.textContent = gameMode === 'personal-best'
       ? 'Get as small as possible in 45 seconds. Hold each score for two seconds to lock it.'
       : METHODS[method].desc;
-    btnGo.textContent = gameMode === 'personal-best' ? '▼ START 45s CHALLENGE' : '▼ START COMPRESSION';
+    btnGo.textContent = gameMode === 'personal-best' ? 'Start 45s challenge' : 'Start compression';
   };
 });
 
@@ -725,7 +736,8 @@ document.addEventListener('visibilitychange', () => {
 fitCanvas();
 requestAnimationFrame(fitCanvas); // re-fit after layout/fonts settle
 setState('idle');
-logLine(logEl, 'PHYSICAL ZIP v1.0 — Select object: [x] HUMAN', 'text-green-300');
+logLine(logEl, 'PHYSICAL ZIP v1.0 - Select object: [x] HUMAN', 'text-green-300');
 logLine(logEl, 'host: vercel static · compute: your browser · uploads: none', 'text-zinc-500');
 renderRecords();
+initIntro();
 if (matchMedia('(max-width: 639px)').matches) document.querySelector<HTMLDetailsElement>('.terminal-panel')?.removeAttribute('open');

@@ -3,133 +3,72 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#080b09" />
-  <title>PHYSICAL ZIP — compress a human</title>
-  <meta name="description" content="A camera looks at a person and compresses them into a .zip. Then extracts them." />
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
-  <link rel="preconnect" href="https://storage.googleapis.com" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗜️</text></svg>" />
+  <meta name="theme-color" content="#171A18" />
+  <title>PHYSICAL ZIP | Less space. Same human.</title>
+  <meta name="description" content="Your body is the controller. Get smaller, hold your pose, and compress yourself into a human archive." />
+  <link rel="preload" href="/fonts/barlow-condensed.ttf" as="font" type="font/ttf" crossorigin />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23F2C94C'/%3E%3Ctext x='18' y='73' font-family='sans-serif' font-size='65' font-weight='900'%3EZ%3C/text%3E%3C/svg%3E" />
 </head>
-<body class="bg-black text-green-400">
+<body>
   <a class="skip-link" href="#game">Skip to game</a>
-  <div id="app" class="min-h-screen flex flex-col">
-    <!-- HEADER -->
-    <header class="border-b border-green-900 px-4 py-2 flex items-center justify-between font-mono text-xs sm:text-sm">
-      <div class="flex items-center gap-2">
-        <span class="inline-block w-3 h-3 rounded-full bg-red-500"></span>
-        <span class="inline-block w-3 h-3 rounded-full bg-yellow-500"></span>
-        <span class="inline-block w-3 h-3 rounded-full bg-green-500"></span>
-        <span class="brand ml-3 tracking-widest font-bold">PHYSICAL_ZIP <span>v2.0</span></span>
+  <section id="intro" class="demo-page" aria-label="Try human compression">
+    <header class="demo-header"><span class="wordmark">PHYSICAL<span>ZIP</span><i class="zip-mark" aria-hidden="true"></i></span><button id="skipIntro" class="text-button">Go to game ↗</button></header>
+    <div class="demo-layout">
+      <div class="demo-copy">
+        <p class="eyebrow">Your body is the controller</p>
+        <h1>YOU ARE<br /><em>THE FILE.</em></h1>
+        <p>Get smaller. Hold your pose. Become a .zip.<br />Then unfold to extract yourself.</p>
+        <button id="enterMachine" class="primary">Try it with your camera <span>↗</span></button>
+        <p class="demo-privacy">No downloads. No uploads. Just you, taking up less space.</p>
       </div>
-      <div id="fps" class="opacity-60">-- fps</div>
-    </header>
-
-    <main id="game" class="flex-1 max-w-6xl w-full mx-auto p-3 sm:p-6 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-      <!-- LEFT: camera -->
-      <section class="border border-green-900 bg-zinc-950 rounded overflow-hidden flex flex-col">
-        <div class="px-3 py-2 font-mono text-xs border-b border-green-900 flex justify-between">
-          <span id="camLabel">/dev/human0 — no signal</span>
-          <span id="modeLabel" class="opacity-70">MODE: IDLE</span>
-        </div>
-        <div id="cameraStage" data-facing="user" class="camera-stage relative bg-black aspect-[4/3] w-full overflow-hidden">
-          <video id="video" playsinline muted autoplay class="absolute inset-0 w-full h-full object-contain opacity-90"></video>
-          <canvas id="overlay" class="absolute inset-0 w-full h-full"></canvas>
-          <img id="ghostPhoto" alt="" class="hidden absolute inset-0 w-full h-full object-cover opacity-40 pointer-events-none" />
-          <!-- floor marker box -->
-          <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div id="floorBox" class="border border-dashed border-green-500/60 w-[46%] h-[86%]"></div>
-          </div>
-          <div id="bigPct" class="absolute bottom-2 left-3 font-mono font-black text-4xl sm:text-5xl text-green-400 drop-shadow-[0_0_12px_rgba(34,197,94,.8)]">100%</div>
-          <div id="savedPct" class="absolute bottom-3 right-3 font-mono text-sm text-amber-300">saved 0%</div>
-          <div id="timer" class="timer-chip" aria-live="polite">READY</div>
-        </div>
-        <div class="p-3 font-mono">
-          <div class="h-3 w-full bg-green-950 rounded overflow-hidden border border-green-900">
-            <div id="bar" class="h-full bg-green-500 transition-all" style="width:0%"></div>
-          </div>
-          <div id="cue" class="mt-2 text-sm sm:text-base min-h-[1.5em] text-green-200">press START CAMERA, then show your shoulders and arms clearly.</div>
-          <div id="warn" class="text-xs text-red-400 min-h-[1em]"></div>
-          <div id="scoreDetails" class="text-xs text-zinc-400 min-h-[1em]">TRACKING: waiting for camera</div>
-        </div>
-        <div class="px-3 pb-3 flex flex-wrap gap-2 font-mono text-sm">
-          <button id="btnCam" class="px-3 py-2 border border-green-700 hover:bg-green-900 rounded">▶ START CAMERA</button>
-          <button id="btnFlip" class="hidden px-3 py-2 border border-green-800 rounded">⇄ FLIP</button>
-          <button id="btnStop" class="hidden px-3 py-2 border border-zinc-700 text-zinc-400 rounded">■ STOP</button>
-          <button id="btnCal" class="px-3 py-2 border border-green-700 hover:bg-green-900 rounded opacity-40" disabled>◉ CALIBRATE 100%</button>
-          <button id="btnGo" class="px-3 py-2 border border-amber-500 text-amber-300 hover:bg-amber-950 rounded opacity-40" disabled>▼ START COMPRESSION</button>
-          <button id="btnReset" class="px-3 py-2 border border-zinc-700 text-zinc-400 hover:bg-zinc-900 rounded">↺ RESET</button>
-        </div>
-        <div id="resultPanel" class="hidden border-t border-green-900 p-3 font-mono">
-          <div class="mb-2 text-xs text-amber-300">COMPRESSION PROOF — captured frames</div>
-          <div id="resultPhotos" class="grid grid-cols-2 gap-3">
-            <figure>
-              <img id="originalPhoto" alt="Original human before compression" class="aspect-[4/3] w-full rounded border border-green-700 object-cover" />
-              <figcaption class="mt-1 text-xs text-green-300">ORIGINAL — 100%</figcaption>
-            </figure>
-            <figure>
-              <img id="compressedPhoto" alt="Human at completed compression" class="aspect-[4/3] w-full rounded border border-amber-500 object-cover" />
-              <figcaption id="compressedCaption" class="mt-1 text-xs text-amber-300">COMPRESSED</figcaption>
-            </figure>
-          </div>
-          <div id="resultSummary" class="result-summary"></div>
-          <label class="privacy-toggle"><input id="includePhotos" type="checkbox" /> Include photos in shared card</label>
-          <button id="btnShare" class="action-wide">↗ SHARE RESULT</button>
-        </div>
-      </section>
-
-      <!-- RIGHT: setup + terminal -->
-      <section class="flex flex-col gap-4">
-        <div class="border border-green-900 bg-zinc-950 rounded p-4 font-mono text-sm">
-          <div class="text-xs opacity-70 mb-2">PHYSICAL ZIP — Select object to compress:</div>
-          <label class="flex items-center gap-2 mb-3">
-            <input type="checkbox" checked disabled class="accent-green-500 w-4 h-4" /> ☑ HUMAN <span class="opacity-50">(upper body or full body)</span>
-          </label>
-          <label class="block text-xs opacity-70 mb-1" for="name">Archive name:</label>
-          <div class="flex items-center gap-2">
-            <input id="name" maxlength="20" placeholder="MERIN" value="MERIN" spellcheck="false"
-              class="flex-1 bg-black border border-green-800 rounded px-3 py-2 text-green-200 outline-none focus:border-green-400 uppercase placeholder:text-green-900" />
-            <span id="zipPreview" class="text-amber-300">merin.zip</span>
-          </div>
-          <div class="text-xs opacity-70 mt-4 mb-2">Compression method:</div>
-          <div class="mode-tabs" id="gameModes" aria-label="Game mode">
-            <button data-mode="classic" class="gmode active">CLASSIC</button>
-            <button data-mode="personal-best" class="gmode">PERSONAL BEST · 45s</button>
-          </div>
-          <div class="grid grid-cols-3 gap-2" id="methods">
-            <button data-m="comfortable" class="mbtn px-2 py-2 border border-green-800 rounded hover:bg-green-950">○ Comfortable<br/><span class="text-xs opacity-60">→75% · 60s</span></button>
-            <button data-m="balanced" class="mbtn px-2 py-2 border border-green-500 bg-green-950 rounded">◉ Balanced<br/><span class="text-xs opacity-60">→60% · 45s</span></button>
-            <button data-m="maximum" class="mbtn px-2 py-2 border border-red-700 text-red-300 rounded hover:bg-red-950">○ Maximum<br/><span class="text-xs opacity-60">→42% · 60s</span></button>
-          </div>
-          <div id="methodDesc" class="text-xs mt-2 opacity-70">Balanced: reach 60% size, hold 3s. Real thresholds, not flavor.</div>
-        </div>
-
-        <section class="records-panel" aria-labelledby="recordsTitle">
-          <div class="records-head"><span id="recordsTitle">LOCAL RECORDS</span><button id="btnClearRecords">clear</button></div>
-          <div id="recordsList" class="records-list"><p>No runs saved on this phone yet.</p></div>
-        </section>
-
-        <details class="terminal-panel border border-green-900 bg-black rounded flex-1" open>
-          <summary class="px-3 py-2 border-b border-green-900 font-mono text-xs flex justify-between">
-            <span>output — zip.log</span>
-            <span id="engineStatus" class="opacity-70">engine: idle</span>
-          </summary>
-          <div id="log" class="flex-1 overflow-y-auto p-3 font-mono text-xs sm:text-[13px] leading-relaxed h-[280px]"></div>
-          <div id="extractPanel" class="hidden border-t border-amber-800 p-3 font-mono text-sm">
-            <div class="text-amber-300 mb-2">EXTRACT HUMAN — match the ghost:</div>
-            <div id="parts" class="grid grid-cols-2 gap-1 text-xs"></div>
-            <div class="flex gap-2 mt-3">
-              <button id="btnExtract" class="flex-1 px-3 py-2 border border-amber-500 text-amber-200 rounded hover:bg-amber-950">▲ EXTRACT HUMAN</button>
-              <button id="btnDl" class="px-3 py-2 border border-green-700 rounded hover:bg-green-950">⬇ .zip cert</button>
+      <div class="demo-station">
+        <div id="demoMachine" class="demo-machine" data-pose="standing" style="--compression:0;--standing:1;--crouched:0">
+          <div class="demo-machine-top"><span>GIVE IT A SQUEEZE</span><span>Illustrated demo</span></div>
+          <div class="demo-interaction">
+            <div class="demo-chamber" aria-hidden="true">
+              <img class="demo-person demo-standing" src="/art/human.png" alt="" fetchpriority="high" />
+              <img class="demo-person demo-crouched" src="/art/human-crouched.png" alt="" />
+              <div class="demo-plate"></div>
+              <div class="demo-package"><span>CONTENTS: YOU</span><strong>human.zip</strong><small>One perfectly good human.</small><i class="demo-zip"></i></div>
             </div>
-            <button id="btnManualDone" class="hidden w-full mt-2 px-3 py-2 border border-green-500 text-green-200 rounded hover:bg-green-950">✓ I MATCH — RESTORED</button>
+            <div class="demo-rail">
+              <span aria-hidden="true">PULL<br />DOWN ↓</span>
+              <div id="demoHandle" role="slider" tabindex="0" aria-label="Human compression handle" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-describedby="demoInstructions"><i class="demo-grip" aria-hidden="true">≡</i></div>
+              <span aria-hidden="true">ZIP</span>
+            </div>
           </div>
-        </details>
+          <div class="hazard-edge" aria-hidden="true"></div>
+        </div>
+        <p id="demoStatus" class="demo-status" role="status">Drag the yellow handle down. You’re in control.</p>
+        <div class="demo-help"><p id="demoInstructions">Pull to zip. Release to extract.<br /><span>Or hold ↓ / End on your keyboard.</span></p><button id="demoToggle" class="secondary" aria-pressed="false">Zip human ↓</button></div>
+      </div>
+    </div>
+  </section>
+  <div id="app" hidden>
+    <header class="app-header"><a class="wordmark" href="#game">PHYSICAL<span>ZIP</span><i class="zip-mark" aria-hidden="true"></i></a><nav><button id="replayIntro">Try the demo ↗</button><span class="local-label">Runs on your device</span></nav></header>
+    <div class="page-heading"><div><p class="eyebrow">The human compression machine</p><h1>MAKE YOURSELF <em>SMALLER.</em></h1></div><p>One camera. One human.<br />A completely unnecessary challenge.</p></div>
+    <main id="game" class="game-layout">
+      <section class="machine-panel" aria-label="Live compression chamber">
+        <div class="chamber-top"><span id="camLabel">Camera disconnected</span><span id="modeLabel">MODE: IDLE</span></div>
+        <div id="cameraStage" data-facing="user" class="camera-stage">
+          <video id="video" playsinline muted autoplay></video><canvas id="overlay"></canvas><img id="ghostPhoto" alt="" class="hidden" />
+          <div id="cameraEmpty" class="camera-empty"><img src="/art/human.png" alt="A human in a yellow jumpsuit, ready to be compressed" /><div><span>SUBJECT NOT LOADED</span><h2>INSERT HUMAN.</h2><p>Start your camera to step inside.</p></div></div>
+          <div id="floorBox" aria-hidden="true"></div><div id="bigPct">100%</div><div id="savedPct">saved 0%</div><div id="timer" class="timer-chip">READY</div>
+          <div class="success-zip" aria-hidden="true"></div>
+        </div>
+        <div class="coaching"><div class="meter"><div id="bar" style="width:0%"></div></div><div id="cue" aria-live="polite">Start your camera. We’ll take it from there.</div><div id="warn" role="status"></div><div class="tracking-line"><span id="scoreDetails">TRACKING: waiting for camera</span><span id="fps">-- fps</span></div></div>
+        <div class="game-controls"><button id="btnCam" class="primary">Start camera ↗</button><button id="btnFlip" class="hidden secondary">⇄ Flip</button><button id="btnStop" class="hidden secondary">Stop camera</button><button id="btnCal" class="secondary" disabled>Calibrate</button><button id="btnGo" class="primary" disabled>Start compression ↓</button><button id="btnReset" class="secondary">↻ Reset</button></div>
+        <div id="resultPanel" class="hidden result-panel"><div class="result-heading"><span>ARCHIVE COMPLETE</span><h2>YOU’VE BEEN ZIPPED.</h2></div><div id="resultPhotos" class="result-photos"><figure><img id="originalPhoto" alt="Original pose" /><figcaption>ORIGINAL / 100%</figcaption></figure><figure><img id="compressedPhoto" alt="Compressed pose" /><figcaption id="compressedCaption">COMPRESSED</figcaption></figure></div><div id="resultSummary"></div><label class="privacy-toggle"><input id="includePhotos" type="checkbox" /> Include my photos in the shared card</label><button id="btnShare" class="primary">Share result ↗</button></div>
+        <div id="extractPanel" class="hidden extract-panel"><h3>Ready to be yourself again?</h3><p>Match your original pose to extract your human.</p><div id="parts"></div><div class="extract-controls"><button id="btnExtract" class="primary">Extract human ↑</button><button id="btnDl" class="secondary">Download certificate</button><button id="btnManualDone" class="hidden secondary">I match my pose ✓</button></div></div>
+        <div class="hazard-edge" aria-hidden="true"></div>
       </section>
+      <aside class="setup-column">
+        <section class="setup-panel"><div class="panel-heading"><span class="eyebrow">Control panel</span><h2>SET YOUR SQUEEZE.</h2></div><label for="name">Name your archive</label><div class="name-field"><input id="name" maxlength="20" placeholder="Your name" value="MERIN" spellcheck="false" /><span id="zipPreview">merin.zip</span></div><label>Choose your challenge</label><div class="mode-tabs" id="gameModes"><button data-mode="classic" class="gmode active" aria-pressed="true">Classic</button><button data-mode="personal-best" class="gmode" aria-pressed="false">Personal Best</button></div><div id="methods"><button data-m="comfortable" class="mbtn"><span>Comfortable</span><small>75% size / 60s</small></button><button data-m="balanced" class="mbtn active"><span>Balanced</span><small>60% size / 45s</small></button><button data-m="maximum" class="mbtn"><span>Maximum</span><small>42% size / 60s</small></button></div><p id="methodDesc">Reach 60% size and hold for 3 seconds. You have 45 seconds.</p><div class="setup-note"><span>GOOD TO KNOW</span><p>Prop up your phone or let a friend film. Keep your shoulders and arms in view.</p></div></section>
+        <section class="records-panel"><div class="records-head"><h2 id="recordsTitle">YOUR SMALLEST SELVES.</h2><button id="btnClearRecords" class="text-button">Clear</button></div><div id="recordsList"></div><p class="records-foot">Records live only on this browser.</p></section>
+        <details class="terminal-panel"><summary><span>Machine diagnostics</span><span id="engineStatus">engine: idle</span></summary><div id="log"></div></details>
+      </aside>
     </main>
-
-    <footer class="px-4 py-3 text-center font-mono text-[11px] opacity-50">
-      100% client-side · no uploads · photos stay in memory · show your upper or full body
-    </footer>
+    <footer class="app-footer"><strong>LESS SPACE. SAME HUMAN.</strong><p>Camera frames stay on your device. Photos are shared only when you choose.</p><span>A compression game. Not actual file compression.</span></footer>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
