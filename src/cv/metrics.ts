@@ -31,49 +31,79 @@ export const IDX = {
   lAnkle: 27, rAnkle: 28,
 } as const;
 
+export type Coverage = 'full' | 'upper' | 'head' | 'none';
+
+export function inFrame(p: Pt | undefined): boolean {
+  return !!p && p.x >= -0.05 && p.x <= 1.05 && p.y >= -0.05 && p.y <= 1.05;
+}
+
+export const KEY_JOINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+const FACE_JOINTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
 export interface PoseFeatures {
   ok: boolean;
+  coverage: Coverage;
+  hasHead: boolean; hasTorso: boolean; hasArms: boolean; hasLegs: boolean;
+  validJoints: number;
   elbowSpread: number; // wrist-to-wrist / shoulder width
   kneeAngleL: number; kneeAngleR: number;
   torsoH: number; // avg shoulder-hip dist
   shoulderW: number;
-  scaleRef: number; // shoulderW + torsoH (camera-distance proxy)
+  scaleRef: number; // torso-based when available, else shoulder width, else 0
   yaw: number; // shoulder width / hip width proxy for sideways (low = sideways)
   headY: number;
-  bboxArea: number; // normalized 0..1
+  bboxArea: number; // normalized 0..1, computed over in-frame joints only
 }
 
 export function poseFeatures(lm: Pt[] | null): PoseFeatures {
-  const bad: PoseFeatures = { ok: false, elbowSpread: 0, kneeAngleL: 180, kneeAngleR: 180, torsoH: 0, shoulderW: 0, scaleRef: 0, yaw: 1, headY: 0, bboxArea: 0 };
+  const bad: PoseFeatures = { ok: false, coverage: 'none', hasHead: false, hasTorso: false, hasArms: false, hasLegs: false, validJoints: 0, elbowSpread: 0, kneeAngleL: 180, kneeAngleR: 180, torsoH: 0, shoulderW: 0, scaleRef: 0, yaw: 1, headY: 0, bboxArea: 0 };
   if (!lm || lm.length < 29) return bad;
   try {
     const g = (i: number) => lm[i];
+    const shL = inFrame(g(IDX.lShoulder)), shR = inFrame(g(IDX.rShoulder));
+    const hipL = inFrame(g(IDX.lHip)), hipR = inFrame(g(IDX.rHip));
+    const kneeL = inFrame(g(IDX.lKnee)), kneeR = inFrame(g(IDX.rKnee));
+    const ankL = inFrame(g(IDX.lAnkle)), ankR = inFrame(g(IDX.rAnkle));
+    const elbL = inFrame(g(IDX.lElbow)), elbR = inFrame(g(IDX.rElbow));
+    const wriL = inFrame(g(IDX.lWrist)), wriR = inFrame(g(IDX.rWrist));
+    const hasHead = inFrame(g(IDX.nose)) || FACE_JOINTS.filter(i => inFrame(lm[i])).length >= 2;
     const shoulderW = dist(g(IDX.lShoulder), g(IDX.rShoulder));
     const wristSpread = dist(g(IDX.lWrist), g(IDX.rWrist));
     const torsoL = dist(g(IDX.lShoulder), g(IDX.lHip));
     const torsoR = dist(g(IDX.rShoulder), g(IDX.rHip));
     const torsoH = (torsoL + torsoR) / 2;
-    const kneeL = angleDeg(g(IDX.lHip), g(IDX.lKnee), g(IDX.lAnkle));
-    const kneeR = angleDeg(g(IDX.rHip), g(IDX.rKnee), g(IDX.rAnkle));
-    const hipW = dist(g(IDX.lHip), g(IDX.rHip)) || 1e-6;
-    const xs = lm.slice(0, 29).map(p => p.x);
-    const ys = lm.slice(0, 29).map(p => p.y);
-    const bw = Math.max(...xs) - Math.min(...xs);
-    const bh = Math.max(...ys) - Math.min(...ys);
+    const hasTorso = shL && shR && hipL && hipR && shoulderW > 0.015 && torsoH > 0.015;
+    const hasLegs = hasTorso && kneeL && kneeR && ankL && ankR;
+    const hasArms = elbL && elbR && wriL && wriR;
+    const validJoints = KEY_JOINTS.filter(i => inFrame(lm[i])).length
+      + FACE_JOINTS.filter(i => inFrame(lm[i])).length;
+    const coverage: Coverage = hasLegs ? 'full'
+      : (hasTorso || (shL && shR) ? 'upper'
+        : (hasHead || shL || shR ? 'head' : 'none'));
+    const kneeAngL = angleDeg(g(IDX.lHip), g(IDX.lKnee), g(IDX.lAnkle));
+    const kneeAngR = angleDeg(g(IDX.rHip), g(IDX.rKnee), g(IDX.rAnkle));
+    const hipW = (hipL && hipR) ? (dist(g(IDX.lHip), g(IDX.rHip)) || 1e-6) : NaN;
+    const inPts = lm.slice(0, 29).filter(inFrame);
+    let bboxArea = 0;
+    if (inPts.length >= 2) {
+      const xs = inPts.map(p => p.x), ys = inPts.map(p => p.y);
+      bboxArea = Math.max(0, (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys)));
+    }
     return {
-      ok: shoulderW > 0.02 && torsoH > 0.02,
+      ok: coverage !== 'none' && validJoints >= 2,
+      coverage, hasHead, hasTorso, hasArms, hasLegs, validJoints,
       elbowSpread: wristSpread / (shoulderW || 1e-6),
-      kneeAngleL: kneeL, kneeAngleR: kneeR,
+      kneeAngleL: kneeAngL, kneeAngleR: kneeAngR,
       torsoH, shoulderW,
-      scaleRef: shoulderW + torsoH,
-      yaw: shoulderW / hipW,
-      headY: g(IDX.nose).y,
-      bboxArea: Math.max(0, bw * bh),
+      scaleRef: torsoH > 0.015 ? shoulderW + torsoH : (shoulderW > 0.015 ? shoulderW : 0),
+      yaw: isFinite(shoulderW / hipW) ? shoulderW / hipW : 1,
+      headY: hasHead ? g(IDX.nose).y : 0,
+      bboxArea,
     };
   } catch { return bad; }
 }
 
-// ---- normalization + extract scoring ----
+// ---- normalization + extract scoring (partial-body aware) ----
 export function normalizePose(lm: Pt[]): Pt[] {
   const hips = { x: (lm[23].x + lm[24].x) / 2, y: (lm[23].y + lm[24].y) / 2 };
   const torsoH = (dist(lm[11], lm[23]) + dist(lm[12], lm[24])) / 2 || 1e-6;
@@ -98,4 +128,46 @@ export function scoreParts(baseline: Pt[], live: Pt[]): Record<string, number> {
     out[k] = Math.max(0, Math.min(1, 1 - avg / 0.6));
   }
   return out;
+}
+
+function fitTransform(lm: Pt[], idx: number[]): { cx: number; cy: number; s: number } {
+  let cx = 0, cy = 0;
+  for (const i of idx) { cx += lm[i].x; cy += lm[i].y; }
+  cx /= idx.length; cy /= idx.length;
+  let v = 0;
+  for (const i of idx) v += (lm[i].x - cx) ** 2 + (lm[i].y - cy) ** 2;
+  v /= idx.length;
+  return { cx, cy, s: Math.sqrt(v) || 1e-6 };
+}
+
+/** Score only the parts visible in the baseline (each pose normalized by its own
+ *  centroid+spread, so matching is about body configuration, not screen position). */
+export function scoreAvailableParts(baseline: Pt[], live: Pt[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, ids] of Object.entries(PARTS)) {
+    const baseValid = ids.filter(i => baseline[i] && inFrame(baseline[i]));
+    const valid = baseValid.filter(i => live[i] && inFrame(live[i]));
+    if (valid.length === 0 || baseValid.length < 2) continue; // need spread for stable scale
+    const Tb = fitTransform(baseline, baseValid);
+    const Tl = fitTransform(live, valid);
+    let s = 0;
+    for (const i of valid) {
+      const bx = (baseline[i].x - Tb.cx) / Tb.s, by = (baseline[i].y - Tb.cy) / Tb.s;
+      const lx = (live[i].x - Tl.cx) / Tl.s, ly = (live[i].y - Tl.cy) / Tl.s;
+      s += Math.hypot(bx - lx, by - ly);
+    }
+    out[k] = Math.max(0, Math.min(1, 1 - (s / valid.length) / 0.8));
+  }
+  return out;
+}
+
+/** Intersection-over-union of two binary mask thumbnails (0/1 per pixel). */
+export function maskIoU(a: Uint8Array, b: Uint8Array): number {
+  let inter = 0, union = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = a[i] ? 1 : 0, y = b[i] ? 1 : 0;
+    inter += x & y; union += x | y;
+  }
+  return union === 0 ? 0 : inter / union;
 }

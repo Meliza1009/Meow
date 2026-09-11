@@ -1,6 +1,6 @@
 import './style.css';
-import { CVEngine, type FrameInfo } from './cv/engine';
-import { ema, poseFeatures, scoreParts, IDX, type Pt } from './cv/metrics';
+import { CVEngine, THUMB_W, THUMB_H, type FrameInfo, type MaskThumb } from './cv/engine';
+import { ema, poseFeatures, scoreAvailableParts, maskIoU, type Pt, type Coverage } from './cv/metrics';
 import { METHODS, sanitizeName, type MethodId } from './coach/methods';
 import { pickCue, milestoneLog } from './coach/rules';
 import { logLine, blip, describeError, cameraHint } from './ui/terminal';
@@ -28,6 +28,8 @@ const methodDesc = $('methodDesc'), engineStatus = $('engineStatus');
 const camLabel = $('camLabel'), modeLabel = $('modeLabel'), fpsEl = $('fps');
 const extractPanel = $('extractPanel'), partsEl = $('parts');
 const btnExtract = $('btnExtract') as HTMLButtonElement, btnDl = $('btnDl') as HTMLButtonElement;
+const ghostPhoto = $('ghostPhoto') as HTMLImageElement;
+const btnManualDone = $('btnManualDone') as HTMLButtonElement;
 
 type State = 'idle' | 'calibrating' | 'ready' | 'compressing' | 'zipped' | 'extracting' | 'done';
 let state: State = 'idle';
@@ -41,13 +43,20 @@ let baselineFrac = 0;
 let baselineScale = 0;
 let baselinePose: Pt[] | null = null;
 let baselineFeat: ReturnType<typeof poseFeatures> | null = null;
+let baselineCoverage: Coverage = 'none';
+let baselineThumb: MaskThumb | null = null;
+let baselinePhoto: string | null = null;
+let extractMode: 'pose' | 'silhouette' | 'manual' | 'none' = 'none';
+let cueCycle = 0;
 let lastLandmarks: Pt[] | null = null;
 let lastFrame: FrameInfo | null = null;
 
 // calibrate accumulation
 let calSamples: number[] = [];
 let calPoses: Pt[][] = [];
+let calPoseScore: number[] = [];
 let calScales: number[] = [];
+let calThumbs: Uint8Array[] = [];
 let calTimer: any = null;
 
 // compress run
@@ -109,7 +118,7 @@ function drawSkeleton(lm: Pt[], color: string, width = 3, alpha = 1) {
 
 function render() {
   octx.clearRect(0, 0, overlay.width, overlay.height);
-  if (extracting && baselinePose) drawSkeleton(baselinePose, '#22c55e', 5, 0.35);
+  if (extracting && extractMode === 'pose' && baselinePose) drawSkeleton(baselinePose, '#22c55e', 5, 0.35);
   if (lastLandmarks) drawSkeleton(lastLandmarks, extracting ? '#ffffff' : '#4ade80', 3, 1);
 }
 
@@ -123,7 +132,7 @@ function onFrame(f: FrameInfo) {
   if (!f.hasPerson) {
     if (noPersonSince === null) noPersonSince = performance.now();
     if (state === 'compressing' || state === 'extracting' || state === 'calibrating') {
-      warnEl.textContent = '⚠ NO SUBJECT — step into frame, full body visible';
+      warnEl.textContent = '⚠ NO SUBJECT — show yourself, any framing works';
     }
     return;
   }
@@ -134,10 +143,12 @@ function onFrame(f: FrameInfo) {
 
   if (state === 'calibrating') {
     calSamples.push(f.personFrac);
+    if (f.thumb) calThumbs.push(f.thumb.data);
     if (f.landmarks) {
       calPoses.push(f.landmarks);
       const feat = poseFeatures(f.landmarks);
-      if (feat.ok) calScales.push(feat.scaleRef);
+      calPoseScore.push(feat.validJoints);
+      if (feat.ok && feat.scaleRef > 0) calScales.push(feat.scaleRef);
     }
     return;
   }
@@ -151,16 +162,19 @@ function onFrame(f: FrameInfo) {
   savedPct.textContent = `saved ${Math.round(saved * 100)}%`;
   bar.style.width = `${Math.round(saved * 100)}%`;
 
-  // moved-distance guard
+  // moved-distance guard (strict for full body, lenient for partial framing)
   if (f.landmarks) {
     const feat = poseFeatures(f.landmarks);
-    if (feat.ok && baselineScale > 0) {
+    if (feat.ok && feat.scaleRef > 0 && baselineScale > 0) {
       const drift = feat.scaleRef / baselineScale;
-      if (drift < 0.85) {
-        warnEl.textContent = '⚠ SUBJECT MOVED BACK — step forward to your marker (paused)';
+      const strict = baselineCoverage === 'full';
+      if (strict ? drift < 0.85 : drift < 0.6) {
+        warnEl.textContent = strict
+          ? '⚠ SUBJECT MOVED BACK — step forward to your marker (paused)'
+          : '⚠ DRIFTING FAR — come a little closer (paused)';
         holdStart = null; partHoldStart = null;
         return;
-      } else if (drift > 1.3) {
+      } else if (strict ? drift > 1.3 : drift > 1.7) {
         warnEl.textContent = '⚠ TOO CLOSE — step back to your marker (paused)';
         holdStart = null; partHoldStart = null;
         return;
@@ -181,7 +195,7 @@ function compressTick(ratio: number, saved: number) {
   if (now - lastCueT > 2500 && lastFrame?.landmarks) {
     lastCueT = now;
     const feat = poseFeatures(lastFrame.landmarks);
-    const { cue, log } = pickCue(feat, baselineFeat, spec, ratio);
+    const { cue, log } = pickCue(feat, baselineFeat, spec, ratio, cueCycle++);
     cueEl.textContent = cue;
     logLine(logEl, log, 'text-green-300');
   }
@@ -207,13 +221,43 @@ function compressTick(ratio: number, saved: number) {
 }
 
 function extractTick() {
-  if (!baselinePose || !lastLandmarks) return;
-  const scores = scoreParts(baselinePose, lastLandmarks);
+  if (extractMode === 'silhouette') {
+    const t = lastFrame?.thumb;
+    if (!baselineThumb || !t) return;
+    const iou = maskIoU(baselineThumb.data, t.data);
+    partsEl.innerHTML = '';
+    const d = document.createElement('div');
+    const ok = iou > 0.85;
+    d.className = ok ? 'text-green-400' : 'text-amber-300';
+    d.textContent = `${ok ? '✓' : '…'} Restoring silhouette — ${Math.round(iou * 100)}%`;
+    partsEl.appendChild(d);
+    if (ok) {
+      if (partHoldStart === null) {
+        partHoldStart = performance.now();
+        logLine(logEl, 'silhouette aligned — HOLD...', 'text-amber-300');
+      }
+      const held = (performance.now() - partHoldStart) / 1000;
+      cueEl.textContent = `HOLD RESTORE — ${(2 - held).toFixed(1)}s`;
+      if (held >= 2) finishExtract();
+    } else partHoldStart = null;
+    return;
+  }
+  if (extractMode !== 'pose' || !baselinePose || !lastLandmarks) return;
+  const scores = scoreAvailableParts(baselinePose, lastLandmarks);
+  const keys = Object.keys(scores);
   const labels: Record<string, string> = { leftArm: 'left arm', rightArm: 'right arm', torso: 'torso+head', legs: 'legs' };
   partsEl.innerHTML = '';
+  if (!keys.length) {
+    const d = document.createElement('div');
+    d.className = 'text-amber-300';
+    d.textContent = '… waiting for visible joints...';
+    partsEl.appendChild(d);
+    partHoldStart = null;
+    return;
+  }
   let allOk = true;
   for (const [k, v] of Object.entries(scores)) {
-    const ok = v > 0.9;
+    const ok = v > 0.85;
     if (!ok) allOk = false;
     const d = document.createElement('div');
     d.className = ok ? 'text-green-400' : 'text-amber-300';
@@ -278,25 +322,25 @@ btnCam.onclick = async () => {
   engine!.start();
   camLabel.textContent = '/dev/human0 — live';
   btnCam.textContent = '● CAMERA LIVE';
-  logLine(logEl, 'camera live. stand back, full body in frame.', 'text-green-300');
-  logLine(logEl, 'next: CALIBRATE 100% (stand tall, arms slightly out)', 'text-zinc-400');
+  logLine(logEl, 'camera live. show yourself — full body, torso, or just your head.', 'text-green-300');
+  logLine(logEl, 'next: CALIBRATE 100% (hold still, any framing)', 'text-zinc-400');
   setState('ready');
 };
 
 btnCal.onclick = () => {
   if (!camOn || !modelsReady || state === 'calibrating') return;
   setState('calibrating');
-  calSamples = []; calPoses = []; calScales = [];
+  calSamples = []; calPoses = []; calPoseScore = []; calScales = []; calThumbs = [];
   emaFrac = NaN;
-  logLine(logEl, 'ANALYZING REDUNDANT LIMBS... stand tall, arms slightly out. 3s...', 'text-amber-300');
-  cueEl.textContent = 'STAND TALL — ARMS SLIGHTLY OUT — 3…';
+  logLine(logEl, 'ANALYZING SUBJECT... show yourself, full or partial body. 3s...', 'text-amber-300');
+  cueEl.textContent = 'SHOW YOURSELF — HOLD STILL — 3…';
   let n = 3;
   calTimer = setInterval(() => {
     n--;
-    if (n > 0) { cueEl.textContent = `STAND TALL — ${n}…`; return; }
+    if (n > 0) { cueEl.textContent = `HOLD STILL — ${n}…`; return; }
     clearInterval(calTimer);
     if (calSamples.length < 10) {
-      logLine(logEl, 'calibration failed — no subject. try better light / step back.', 'text-red-400');
+      logLine(logEl, 'calibration failed — no subject. try better light / move into frame.', 'text-red-400');
       setState('ready');
       return;
     }
@@ -304,12 +348,30 @@ btnCal.onclick = () => {
     baselineFrac = calSamples.slice(2, -2).reduce((a, b) => a + b, 0) / Math.max(1, calSamples.length - 4);
     calScales.sort((a, b) => a - b);
     baselineScale = calScales.length ? calScales[Math.floor(calScales.length / 2)] : 0;
-    baselinePose = calPoses[Math.floor(calPoses.length / 2)] || null;
+    // best pose = most visible joints (works with partial bodies)
+    let bestIdx = -1, bestScore = -1;
+    calPoseScore.forEach((s, i) => { if (s > bestScore) { bestScore = s; bestIdx = i; } });
+    baselinePose = bestIdx >= 0 ? calPoses[bestIdx] : null;
     baselineFeat = baselinePose ? poseFeatures(baselinePose) : null;
+    // average silhouette thumbnail for silhouette-mode extract
+    baselineThumb = null;
+    if (calThumbs.length) {
+      const len = calThumbs[0].length;
+      const acc = new Float32Array(len);
+      for (const t of calThumbs) for (let i = 0; i < len; i++) acc[i] += t[i];
+      const data = new Uint8Array(len);
+      for (let i = 0; i < len; i++) data[i] = acc[i] / calThumbs.length >= 0.5 ? 1 : 0;
+      baselineThumb = { w: THUMB_W, h: THUMB_H, data };
+    }
+    baselinePhoto = snapshotVideo(video);
+    baselineCoverage = baselineFeat && baselineFeat.ok ? baselineFeat.coverage : 'upper';
+    const covLabel = baselineCoverage === 'full' ? 'full body'
+      : baselineCoverage === 'upper' ? 'upper body'
+      : baselineCoverage === 'head' ? 'head/shoulders' : 'subject';
     emaFrac = baselineFrac;
     bestRatio = 1;
     bigPct.textContent = '100%'; savedPct.textContent = 'saved 0%'; bar.style.width = '0%';
-    logLine(logEl, `Original human size = 100% (frac ${baselineFrac.toFixed(4)}${lastFrame?.fromMask ? ', mask' : ', bbox'})`, 'text-green-300');
+    logLine(logEl, `Original subject = 100% (${covLabel}, ${lastFrame?.fromMask ? 'mask' : 'bbox'})`, 'text-green-300');
     cueEl.textContent = 'CALIBRATED — press START COMPRESSION and shrink.';
     setState('ready');
     blip(740);
@@ -322,7 +384,9 @@ btnGo.onclick = () => {
   const zip = sanitizeName(nameInput.value) + '.zip';
   setState('compressing');
   extractPanel.classList.add('hidden');
-  bestRatio = 1; holdStart = null; lastMilestone = 0; lastCueT = 0;
+  ghostPhoto.classList.add('hidden');
+  btnManualDone.classList.add('hidden');
+  bestRatio = 1; holdStart = null; lastMilestone = 0; lastCueT = 0; cueCycle = 0;
   timeLeft = spec.timeSec;
   runStart = Date.now();
   logLine(logEl, `> zip -9 ${zip} HUMAN  (method: ${spec.label})`, 'text-zinc-300');
@@ -358,16 +422,44 @@ function finishCompress(ratio: number) {
 }
 
 btnExtract.onclick = () => {
-  if (!baselinePose || (state !== 'zipped' && state !== 'done')) return;
+  if (state !== 'zipped' && state !== 'done') return;
+  const poseKeys = baselinePose ? Object.keys(scoreAvailableParts(baselinePose, baselinePose)) : [];
+  if (baselinePose && poseKeys.length > 0) extractMode = 'pose';
+  else if (baselineThumb) extractMode = 'silhouette';
+  else if (baselinePhoto) extractMode = 'manual';
+  else { logLine(logEl, 'nothing saved to restore — calibrate first.', 'text-red-400'); return; }
   setState('extracting');
   extracting = true;
   partHoldStart = null;
-  logLine(logEl, '> unzip human.zip — restoring... match the GREEN ghost.', 'text-amber-300');
-  cueEl.textContent = 'UNFOLD — match the green ghost skeleton!';
+  partsEl.innerHTML = '';
+  if (extractMode === 'pose') {
+    ghostPhoto.classList.add('hidden');
+    btnManualDone.classList.add('hidden');
+    logLine(logEl, '> unzip human.zip — restoring... match the GREEN ghost.', 'text-amber-300');
+    cueEl.textContent = 'UNFOLD — match the green ghost skeleton!';
+  } else {
+    if (baselinePhoto) { ghostPhoto.src = baselinePhoto; ghostPhoto.classList.remove('hidden'); }
+    if (extractMode === 'silhouette') {
+      btnManualDone.classList.add('hidden');
+      logLine(logEl, '> unzip human.zip — restoring... match the photo silhouette.', 'text-amber-300');
+      cueEl.textContent = 'MOVE BACK INTO YOUR SAVED SILHOUETTE!';
+    } else {
+      btnManualDone.classList.remove('hidden');
+      logLine(logEl, '> unzip human.zip — no tracking data, match the photo by eye.', 'text-amber-300');
+      cueEl.textContent = 'MATCH THE PHOTO, then press ✓ I MATCH!';
+    }
+  }
+};
+
+btnManualDone.onclick = () => {
+  if (state === 'extracting' && extractMode === 'manual') finishExtract();
 };
 
 function finishExtract() {
   extracting = false;
+  extractMode = 'none';
+  ghostPhoto.classList.add('hidden');
+  btnManualDone.classList.add('hidden');
   setState('done');
   cueEl.textContent = 'Extraction complete. HUMAN RESTORED.';
   logLine(logEl, 'Extraction complete. HUMAN RESTORED. 🎉', 'text-green-300');
@@ -383,7 +475,12 @@ btnDl.onclick = () => {
 
 btnReset.onclick = () => {
   clearInterval(runTimer); clearInterval(calTimer);
-  extracting = false; baselineFrac = 0; baselinePose = null;
+  extracting = false; extractMode = 'none';
+  baselineFrac = 0; baselinePose = null; baselineFeat = null;
+  baselineCoverage = 'none'; baselineThumb = null; baselinePhoto = null;
+  ghostPhoto.classList.add('hidden');
+  btnManualDone.classList.add('hidden');
+  ghostPhoto.removeAttribute('src');
   emaFrac = NaN; bestRatio = 1;
   bigPct.textContent = '100%'; savedPct.textContent = 'saved 0%'; bar.style.width = '0%';
   cueEl.textContent = 'reset. calibrate again when ready.';

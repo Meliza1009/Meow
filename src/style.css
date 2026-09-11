@@ -9,6 +9,7 @@ html, body {
 #log::-webkit-scrollbar-thumb { background: #14532d; }
 video { transform: scaleX(-1); } /* mirror selfie */
 #overlay { transform: scaleX(-1); }
+#ghostPhoto { transform: scaleX(-1); }
 .mbtn.active {
   outline: 2px solid currentColor;
 }

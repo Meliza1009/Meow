@@ -1,14 +1,19 @@
 import { FilesetResolver, PoseLandmarker, ImageSegmenter } from '@mediapipe/tasks-vision';
 import { poseFeatures, type Pt } from './metrics';
 
+export interface MaskThumb { w: number; h: number; data: Uint8Array }
+
 export interface FrameInfo {
   personFrac: number; // 0..1 fraction of frame = person (mask) or bbox fallback
   fromMask: boolean;
   segW: number; segH: number;
+  thumb: MaskThumb | null; // downsampled binary silhouette for ghost/silhouette matching
   landmarks: Pt[] | null;
   hasPerson: boolean;
   fps: number;
 }
+
+export const THUMB_W = 64, THUMB_H = 48;
 
 // JS wrapper (npm) and WASM glue must be the same version — WASM is self-hosted
 // in public/wasm so the app never depends on a third-party CDN for the runtime.
@@ -170,6 +175,7 @@ export class CVEngine {
     let personFrac = 0;
     let fromMask = false;
     let segW = 0, segH = 0;
+    let thumb: MaskThumb | null = null;
     if (this.segmenter && this.maskOK) {
       try {
         const r = this.segmenter.segmentForVideo(this.video, now);
@@ -188,22 +194,36 @@ export class CVEngine {
           for (let i = 0; i < arr.length; i += 2) if (arr[i] !== 0) c++;
           personFrac = (c * 2) / arr.length;
           fromMask = true;
+          // downsampled binary silhouette thumbnail
+          const td = new Uint8Array(THUMB_W * THUMB_H);
+          for (let ty = 0; ty < THUMB_H; ty++) {
+            const sy = Math.min(segH - 1, (ty * segH / THUMB_H) | 0);
+            for (let tx = 0; tx < THUMB_W; tx++) {
+              const sx = Math.min(segW - 1, (tx * segW / THUMB_W) | 0);
+              td[ty * THUMB_W + tx] = arr[sy * segW + sx] !== 0 ? 1 : 0;
+            }
+          }
+          thumb = { w: THUMB_W, h: THUMB_H, data: td };
           try { mask.close?.(); } catch {}
           try { (r as any).close?.(); } catch {}
-          if (personFrac > 0.02) hasPerson = true;
+          if (personFrac > 0.015) hasPerson = true;
         }
       } catch (e) { console.warn('seg err', e); }
     }
 
     if (!fromMask) {
-      // bbox fallback
+      // bbox fallback (works with partial bodies: bbox of visible joints)
       if (landmarks) {
         const f = poseFeatures(landmarks);
-        personFrac = f.ok ? Math.max(0.02, f.bboxArea) : 0;
+        personFrac = f.ok ? Math.max(0.015, f.bboxArea) : 0;
+        if (f.ok && personFrac > 0.008) hasPerson = true;
         segW = 0; segH = 0;
       }
+    } else if (landmarks) {
+      // mask present but tiny/ambiguous: partial-body pose still counts as subject
+      if (!hasPerson && poseFeatures(landmarks).ok) hasPerson = true;
     }
 
-    this.onFrame({ personFrac, fromMask, segW, segH, landmarks, hasPerson, fps: this.fps });
+    this.onFrame({ personFrac, fromMask, segW, segH, thumb, landmarks, hasPerson, fps: this.fps });
   }
 }
