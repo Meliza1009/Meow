@@ -115,7 +115,13 @@ export class CVEngine {
         const mask: any = (r as any).categoryMask;
         if (mask) {
           segW = mask.width; segH = mask.height;
-          const arr: Uint8Array = mask.getAsUint8Array();
+          let arr: ArrayLike<number> | null = null;
+          try {
+            arr = mask.getAsUint8Array();
+          } catch {
+            try { arr = (mask as any).getAsFloat32Array(); } catch { arr = null; }
+          }
+          if (!arr) return;
           let c = 0;
           // sample every 2nd pixel for speed (ratio unaffected)
           for (let i = 0; i < arr.length; i += 2) if (arr[i] !== 0) c++;

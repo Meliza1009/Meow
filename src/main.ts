@@ -6,6 +6,14 @@ import { pickCue, milestoneLog } from './coach/rules';
 import { logLine, blip } from './ui/terminal';
 import { downloadCert, snapshotVideo } from './zip/cert';
 
+// surface boot/runtime errors in-page instead of silent black screen
+window.addEventListener('error', (e) => {
+  try { warnEl.textContent = '⚠ ' + (e.message || 'script error'); } catch { /* noop */ }
+});
+window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
+  try { warnEl.textContent = '⚠ ' + ((e.reason as any)?.message || e.reason || 'load error'); } catch { /* noop */ }
+});
+
 // ---------- dom ----------
 const $ = (id: string) => document.getElementById(id)!;
 const video = $('video') as HTMLVideoElement;
@@ -301,7 +309,6 @@ btnGo.onclick = () => {
   clearInterval(runTimer);
   runTimer = setInterval(() => {
     timeLeft = spec.timeSec - Math.floor((Date.now() - runStart) / 1000);
-    if (timeLeft <= 10 && timeLeft > 0) cueEl.textContent += '';
     if (timeLeft <= 0) {
       clearInterval(runTimer);
       if (state === 'compressing') {
@@ -383,6 +390,7 @@ document.querySelectorAll('.mbtn').forEach(b => {
 document.querySelector('[data-m="balanced"]')?.classList.add('active');
 
 fitCanvas();
+requestAnimationFrame(fitCanvas); // re-fit after layout/fonts settle
 setState('idle');
 logLine(logEl, 'PHYSICAL ZIP v1.0 — Select object: [x] HUMAN', 'text-green-300');
 logLine(logEl, 'host: vercel static · compute: your browser · uploads: none', 'text-zinc-500');
