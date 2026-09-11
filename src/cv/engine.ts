@@ -1,0 +1,142 @@
+import { FilesetResolver, PoseLandmarker, ImageSegmenter } from '@mediapipe/tasks-vision';
+import { poseFeatures, type Pt } from './metrics';
+
+export interface FrameInfo {
+  personFrac: number; // 0..1 fraction of frame = person (mask) or bbox fallback
+  fromMask: boolean;
+  segW: number; segH: number;
+  landmarks: Pt[] | null;
+  hasPerson: boolean;
+  fps: number;
+}
+
+const WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm';
+const POSE_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+const SEG_URL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite';
+
+export class CVEngine {
+  video: HTMLVideoElement;
+  pose: PoseLandmarker | null = null;
+  segmenter: ImageSegmenter | null = null;
+  maskOK = false;
+  running = false;
+  private raf = 0;
+  private lastT = 0;
+  private lastFpsT = performance.now();
+  private frames = 0;
+  fps = 0;
+  onFrame: (f: FrameInfo) => void = () => {};
+  onStatus: (s: string) => void = () => {};
+
+  constructor(video: HTMLVideoElement) { this.video = video; }
+
+  async init() {
+    this.onStatus('loading vision runtime...');
+    const fileset = await FilesetResolver.forVisionTasks(WASM);
+    this.onStatus('loading pose model...');
+    try {
+      this.pose = await PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: POSE_URL, delegate: 'GPU' },
+        runningMode: 'VIDEO', numPoses: 1,
+        minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+      } as any);
+    } catch {
+      this.pose = await PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: POSE_URL, delegate: 'CPU' },
+        runningMode: 'VIDEO', numPoses: 1,
+      } as any);
+    }
+    this.onStatus('loading segmentation model...');
+    try {
+      this.segmenter = await ImageSegmenter.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: SEG_URL, delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        outputCategoryMask: true,
+        outputConfidenceMasks: false,
+      } as any);
+      this.maskOK = true;
+    } catch (e) {
+      console.warn('segmenter failed, bbox fallback', e);
+      this.maskOK = false;
+    }
+    this.onStatus(this.maskOK ? 'engine: mask+pose ready' : 'engine: pose-only (bbox fallback)');
+  }
+
+  async startCamera(): Promise<void> {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+      audio: false,
+    });
+    this.video.srcObject = stream;
+    await this.video.play();
+  }
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    this.lastT = 0;
+    const loop = () => {
+      if (!this.running) return;
+      this.raf = requestAnimationFrame(loop);
+      const now = performance.now();
+      if (now - this.lastT < 66) return; // ~15fps
+      if (this.video.readyState < 2 || this.video.videoWidth === 0) return;
+      this.lastT = now;
+      this.frames++;
+      if (now - this.lastFpsT > 1000) { this.fps = this.frames; this.frames = 0; this.lastFpsT = now; }
+      this.process(now);
+    };
+    loop();
+  }
+
+  stop() { this.running = false; cancelAnimationFrame(this.raf); }
+
+  private process(now: number) {
+    let landmarks: Pt[] | null = null;
+    let hasPerson = false;
+    try {
+      if (this.pose) {
+        const r = this.pose.detectForVideo(this.video, now);
+        const lm = r.landmarks?.[0] as any;
+        if (lm && lm.length >= 29) {
+          landmarks = lm.map((p: any) => ({ x: p.x, y: p.y, v: p.visibility ?? 1 }));
+          const f = poseFeatures(landmarks);
+          hasPerson = f.ok;
+        }
+      }
+    } catch (e) { console.warn('pose err', e); }
+
+    let personFrac = 0;
+    let fromMask = false;
+    let segW = 0, segH = 0;
+    if (this.segmenter && this.maskOK) {
+      try {
+        const r = this.segmenter.segmentForVideo(this.video, now);
+        const mask: any = (r as any).categoryMask;
+        if (mask) {
+          segW = mask.width; segH = mask.height;
+          const arr: Uint8Array = mask.getAsUint8Array();
+          let c = 0;
+          // sample every 2nd pixel for speed (ratio unaffected)
+          for (let i = 0; i < arr.length; i += 2) if (arr[i] !== 0) c++;
+          personFrac = (c * 2) / arr.length;
+          fromMask = true;
+          try { mask.close?.(); } catch {}
+          try { (r as any).close?.(); } catch {}
+          if (personFrac > 0.02) hasPerson = true;
+        }
+      } catch (e) { console.warn('seg err', e); }
+    }
+
+    if (!fromMask) {
+      // bbox fallback
+      if (landmarks) {
+        const f = poseFeatures(landmarks);
+        personFrac = f.ok ? Math.max(0.02, f.bboxArea) : 0;
+        segW = 0; segH = 0;
+      }
+    }
+
+    this.onFrame({ personFrac, fromMask, segW, segH, landmarks, hasPerson, fps: this.fps });
+  }
+}

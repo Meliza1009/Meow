@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+html, body {
+  background: #000;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+#log::-webkit-scrollbar { width: 8px; }
+#log::-webkit-scrollbar-thumb { background: #14532d; }
+video { transform: scaleX(-1); } /* mirror selfie */
+#overlay { transform: scaleX(-1); }
+.mbtn.active {
+  outline: 2px solid currentColor;
+}
