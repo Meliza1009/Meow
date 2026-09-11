@@ -211,17 +211,17 @@ export class CVEngine {
       } catch (e) { console.warn('seg err', e); }
     }
 
-    if (!fromMask) {
-      // bbox fallback (works with partial bodies: bbox of visible joints)
-      if (landmarks) {
-        const f = poseFeatures(landmarks);
-        personFrac = f.ok ? Math.max(0.015, f.bboxArea) : 0;
-        if (f.ok && personFrac > 0.008) hasPerson = true;
-        segW = 0; segH = 0;
-      }
-    } else if (landmarks) {
-      // mask present but tiny/ambiguous: partial-body pose still counts as subject
-      if (!hasPerson && poseFeatures(landmarks).ok) hasPerson = true;
+    // A segmentation mask can be present but empty or too small, especially with
+    // partial framing. In that case use the pose bounding box for both detection
+    // and size measurement; otherwise calibration can record a zero baseline and
+    // leave START COMPRESSION disabled.
+    const maskIsUsable = fromMask && personFrac > 0.015;
+    if (!maskIsUsable && landmarks) {
+      const f = poseFeatures(landmarks);
+      personFrac = f.ok ? Math.max(0.015, f.bboxArea) : 0;
+      fromMask = false;
+      if (f.ok && personFrac > 0.008) hasPerson = true;
+      segW = 0; segH = 0;
     }
 
     this.onFrame({ personFrac, fromMask, segW, segH, thumb, landmarks, hasPerson, fps: this.fps });
