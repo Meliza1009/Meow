@@ -5,6 +5,8 @@ import { METHODS, sanitizeName, type MethodId } from './coach/methods';
 import { pickCue, milestoneLog } from './coach/rules';
 import { logLine, blip, describeError, cameraHint } from './ui/terminal';
 import { downloadCert, snapshotVideo } from './zip/cert';
+import { clearRecords, loadRecords, saveRecord, type GameMode, type GameRecord } from './game/records';
+import { makeResultCard, shareResult } from './game/share';
 
 // surface boot/runtime errors in-page instead of silent black screen
 window.addEventListener('error', (e) => {
@@ -35,12 +37,21 @@ const resultPanel = $('resultPanel');
 const originalPhoto = $('originalPhoto') as HTMLImageElement;
 const compressedPhoto = $('compressedPhoto') as HTMLImageElement;
 const compressedCaption = $('compressedCaption');
+const cameraStage = $('cameraStage'), timerEl = $('timer');
+const btnFlip = $('btnFlip') as HTMLButtonElement, btnStop = $('btnStop') as HTMLButtonElement;
+const btnShare = $('btnShare') as HTMLButtonElement, includePhotos = $('includePhotos') as HTMLInputElement;
+const resultSummary = $('resultSummary'), recordsList = $('recordsList'), btnClearRecords = $('btnClearRecords') as HTMLButtonElement;
+const methodsEl = $('methods');
+const resultPhotos = $('resultPhotos'), terminalPanel = document.querySelector<HTMLDetailsElement>('.terminal-panel')!;
 
 type State = 'idle' | 'calibrating' | 'ready' | 'compressing' | 'zipped' | 'extracting' | 'done';
 let state: State = 'idle';
 let method: MethodId = 'balanced';
+let gameMode: GameMode = 'classic';
+let facing: 'user' | 'environment' = 'user';
 let engine: CVEngine | null = null;
 let camOn = false, modelsReady = false;
+let cameraBusy = false;
 
 // tracker
 let emaFrac = NaN;
@@ -65,16 +76,19 @@ let calThumbs: Uint8Array[] = [];
 let calTimer: any = null;
 
 // compress run
-let runStart = 0, runTimer: any = null, timeLeft = 0;
+let timeLeft = 0, runElapsedMs = 0, lastValidFrameAt = 0;
 let bestRatio = 1, holdStart: number | null = null;
 let lastCueT = 0, lastMilestone = 0;
 let noPersonSince: number | null = null;
 let startAfterCalibration = false;
+let pbCandidate = 1, pbCandidateStart: number | null = null, pbQualified = 1;
+let pbPhoto: string | null = null;
 
 // extract run
 let extracting = false;
 let partHoldStart: number | null = null;
 let finalRatio = 1;
+let currentRecord: GameRecord | null = null;
 
 // ---------- helpers ----------
 function setState(s: State) {
@@ -84,12 +98,16 @@ function setState(s: State) {
   btnCal.classList.toggle('opacity-40', btnCal.disabled);
   btnGo.disabled = !(camOn && modelsReady && (s === 'ready' || s === 'idle'));
   btnGo.classList.toggle('opacity-40', btnGo.disabled);
+  const roundActive = s === 'calibrating' || s === 'compressing' || s === 'extracting';
+  btnFlip.disabled = roundActive;
+  document.querySelectorAll<HTMLButtonElement>('.mbtn, .gmode').forEach(button => button.disabled = roundActive);
+  nameInput.disabled = roundActive;
 }
 
 function fitCanvas() {
   const r = overlay.parentElement!.getBoundingClientRect();
-  overlay.width = Math.max(320, Math.floor(r.width));
-  overlay.height = Math.max(240, Math.floor(r.height));
+  overlay.width = Math.max(1, Math.floor(r.width));
+  overlay.height = Math.max(1, Math.floor(r.height));
 }
 window.addEventListener('resize', fitCanvas);
 
@@ -141,6 +159,9 @@ function onFrame(f: FrameInfo) {
       warnEl.textContent = '⚠ NO SUBJECT — show yourself, any framing works';
       scoreDetails.textContent = 'TRACKING: paused — subject not found';
       holdStart = null;
+      pbCandidateStart = null;
+      lastValidFrameAt = 0;
+      timerEl.textContent = 'PAUSED';
     }
     return;
   }
@@ -176,6 +197,9 @@ function onFrame(f: FrameInfo) {
           : '⚠ TRACKING UNSTABLE — show shoulders and arms (paused)';
       scoreDetails.textContent = 'TRACKING: paused — score held';
       holdStart = null;
+      pbCandidateStart = null;
+      lastValidFrameAt = 0;
+      timerEl.textContent = 'PAUSED';
     }
     return;
   }
@@ -193,8 +217,48 @@ function onFrame(f: FrameInfo) {
   scoreDetails.textContent = `TRACKING: locked · fold ${Math.round(progress.folding * 100)}% · silhouette ${Math.round(progress.silhouette * 100)}%`;
   warnEl.textContent = '';
 
-  if (state === 'compressing') compressTick(clamped, saved);
+  if (state === 'compressing') {
+    const now = performance.now();
+    if (lastValidFrameAt) runElapsedMs += Math.min(250, now - lastValidFrameAt);
+    lastValidFrameAt = now;
+    const limit = gameMode === 'personal-best' ? 45 : METHODS[method].timeSec;
+    timeLeft = Math.max(0, limit - runElapsedMs / 1000);
+    timerEl.textContent = `${Math.ceil(timeLeft)}s`;
+    if (gameMode === 'personal-best') personalBestTick(clamped);
+    else compressTick(clamped, saved);
+    if (timeLeft <= 0 && state === 'compressing') {
+      if (gameMode === 'personal-best') finishCompress(pbQualified);
+      else {
+        logLine(logEl, `TIMEOUT — best was ${Math.round(bestRatio * 100)}%. press START COMPRESSION to retry.`, 'text-red-400');
+        setState('ready');
+        cueEl.textContent = 'TIMEOUT — retry, you can beat it.';
+        timerEl.textContent = 'READY';
+      }
+    }
+  }
   if (state === 'extracting' && extracting) extractTick();
+}
+
+function personalBestTick(ratio: number) {
+  const now = performance.now();
+  bestRatio = Math.min(bestRatio, ratio);
+  if (ratio < pbCandidate - 0.02) {
+    pbCandidate = ratio;
+    pbCandidateStart = now;
+  } else if (pbCandidateStart && ratio <= pbCandidate + 0.03) {
+    const held = (now - pbCandidateStart) / 1000;
+    cueEl.textContent = held < 2 ? `HOLD SCORE — ${(2 - held).toFixed(1)}s` : 'SCORE LOCKED — go smaller';
+    if (held >= 2 && pbCandidate < pbQualified) {
+      pbQualified = pbCandidate;
+      pbPhoto = snapshotVideo(video, facing === 'user');
+      pbCandidateStart = null;
+      logLine(logEl, `score locked: ${Math.round(pbQualified * 100)}%`, 'text-amber-300');
+      blip(820);
+    }
+  } else if (ratio > pbCandidate + 0.03) {
+    pbCandidate = ratio;
+    pbCandidateStart = now;
+  }
 }
 
 function compressTick(ratio: number, saved: number) {
@@ -288,21 +352,34 @@ function extractTick() {
 
 // ---------- flows ----------
 async function ensureEngine() {
-  if (engine) return;
-  engine = new CVEngine(video);
-  engine.onStatus = (s) => { engineStatus.textContent = s; };
-  engine.onFrame = onFrame;
+  if (!engine) {
+    engine = new CVEngine(video);
+    engine.onStatus = (s) => { engineStatus.textContent = s; };
+    engine.onFrame = onFrame;
+    engine.onCameraEnded = () => {
+      camOn = false; lastValidFrameAt = 0;
+      baselineFrac = 0; baselinePose = null; baselineFeat = null; baselinePhoto = null;
+      setState('idle');
+      timerEl.textContent = 'CAMERA LOST';
+      warnEl.textContent = '⚠ CAMERA STOPPED — reconnect and calibrate again';
+      btnCam.disabled = false; btnCam.textContent = '▶ RECONNECT CAMERA';
+      btnFlip.classList.add('hidden'); btnStop.classList.add('hidden');
+    };
+  }
+  if (modelsReady) return;
   try {
     await engine.init();
   } catch (e) {
-    engine = null; // allow clean retry
+    modelsReady = false;
     throw e;
   }
   modelsReady = true;
   setState(state);
 }
 
-btnCam.onclick = async () => {
+async function startCamera() {
+  if (cameraBusy) return;
+  cameraBusy = true;
   btnCam.disabled = true;
   btnCam.textContent = '◌ WORKING...';
   logLine(logEl, '> physical_zip --scan HUMAN', 'text-zinc-400');
@@ -310,31 +387,58 @@ btnCam.onclick = async () => {
   logLine(logEl, 'opening camera while tracking loads...', 'text-zinc-500');
   const modelPromise = ensureEngine();
   try {
-    await engine!.startCamera();
+    facing = await engine!.startCamera(facing);
   } catch (e) {
     logLine(logEl, `camera failed: ${describeError(e)}${cameraHint(e)}`, 'text-red-400');
     btnCam.disabled = false;
     btnCam.textContent = '▶ RETRY CAMERA';
+    cameraBusy = false;
     return;
   }
   camOn = true;
+  cameraStage.dataset.facing = facing;
+  if (video.videoWidth && video.videoHeight) cameraStage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
   fitCanvas();
   requestAnimationFrame(fitCanvas);
   camLabel.textContent = '/dev/human0 — live';
   btnCam.textContent = '● CAMERA LIVE';
+  btnFlip.classList.remove('hidden'); btnStop.classList.remove('hidden');
   logLine(logEl, 'camera live. preparing tracking...', 'text-green-300');
   try {
     await modelPromise;
     logLine(logEl, 'tracking ready.', 'text-green-300');
   } catch (e) {
     logLine(logEl, `model load failed: ${describeError(e)} — check connection / allow cdn.jsdelivr.net + storage.googleapis.com (adblock?), then retry.`, 'text-red-400');
-    btnCam.textContent = '● CAMERA LIVE — RETRY TRACKING';
+    btnCam.textContent = '↻ RETRY TRACKING';
+    btnCam.disabled = false;
+    cameraBusy = false;
     return;
   }
   engine!.start();
   logLine(logEl, 'camera live. show your shoulders and arms; full body also works.', 'text-green-300');
   logLine(logEl, 'next: CALIBRATE 100% (hold still at this distance)', 'text-zinc-400');
   setState('ready');
+  cameraBusy = false;
+}
+btnCam.onclick = startCamera;
+
+btnFlip.onclick = async () => {
+  if (cameraBusy || state === 'calibrating' || state === 'compressing' || state === 'extracting') return;
+  facing = facing === 'user' ? 'environment' : 'user';
+  baselineFrac = 0; baselinePose = null; baselineFeat = null; baselinePhoto = null;
+  logLine(logEl, `switching to ${facing === 'user' ? 'front' : 'rear'} camera...`, 'text-zinc-400');
+  await startCamera();
+  cueEl.textContent = 'CAMERA SWITCHED — recalibrate before playing.';
+};
+
+btnStop.onclick = () => {
+  engine?.stop(); engine?.stopCamera();
+  camOn = false; cameraBusy = false;
+  baselineFrac = 0; baselinePose = null; baselineFeat = null; baselinePhoto = null;
+  btnCam.disabled = false; btnCam.textContent = '▶ START CAMERA';
+  btnFlip.classList.add('hidden'); btnStop.classList.add('hidden');
+  camLabel.textContent = '/dev/human0 — no signal';
+  timerEl.textContent = 'READY'; setState('idle');
 };
 
 btnCal.onclick = () => {
@@ -342,17 +446,19 @@ btnCal.onclick = () => {
   setState('calibrating');
   calSamples = []; calPoses = []; calPoseScore = []; calScales = []; calThumbs = [];
   emaFrac = NaN;
-  logLine(logEl, 'ANALYZING SUBJECT... hold still with shoulders and arms visible. 3s...', 'text-amber-300');
-  cueEl.textContent = 'SHOW YOURSELF — HOLD STILL — 3…';
-  let n = 3;
+  logLine(logEl, 'ANALYZING SUBJECT... hold still with shoulders and arms visible. 5s...', 'text-amber-300');
+  cueEl.textContent = 'SHOW YOURSELF — HOLD STILL — 5…';
+  let n = 5;
+  timerEl.textContent = '5';
   calTimer = setInterval(() => {
     n--;
-    if (n > 0) { cueEl.textContent = `HOLD STILL — ${n}…`; return; }
+    if (n > 0) { cueEl.textContent = `HOLD STILL — ${n}…`; timerEl.textContent = String(n); return; }
     clearInterval(calTimer);
     if (calSamples.length < 15) {
       startAfterCalibration = false;
       logLine(logEl, 'calibration failed — no subject. try better light / move into frame.', 'text-red-400');
       setState('ready');
+      timerEl.textContent = 'READY';
       return;
     }
     calSamples.sort((a, b) => a - b);
@@ -374,7 +480,7 @@ btnCal.onclick = () => {
       for (let i = 0; i < len; i++) data[i] = acc[i] / calThumbs.length >= 0.5 ? 1 : 0;
       baselineThumb = { w: THUMB_W, h: THUMB_H, data };
     }
-    baselinePhoto = snapshotVideo(video);
+    baselinePhoto = snapshotVideo(video, facing === 'user');
     baselineCoverage = baselineFeat && baselineFeat.ok ? baselineFeat.coverage : 'upper';
     const covLabel = baselineCoverage === 'full' ? 'full body'
       : baselineCoverage === 'upper' ? 'upper body'
@@ -385,6 +491,7 @@ btnCal.onclick = () => {
     logLine(logEl, `Original subject = 100% (${covLabel}, ${lastFrame?.fromMask ? 'mask' : 'bbox'})`, 'text-green-300');
     cueEl.textContent = 'CALIBRATED — press START COMPRESSION and shrink.';
     setState('ready');
+    timerEl.textContent = 'READY';
     blip(740);
     if (startAfterCalibration) {
       startAfterCalibration = false;
@@ -404,23 +511,14 @@ function startCompression() {
   btnManualDone.classList.add('hidden');
   bestRatio = 1; holdStart = null; lastMilestone = 0; lastCueT = 0; cueCycle = 0;
   emaFrac = 0;
-  timeLeft = spec.timeSec;
-  runStart = Date.now();
-  logLine(logEl, `> zip -9 ${zip} HUMAN  (method: ${spec.label})`, 'text-zinc-300');
-  logLine(logEl, `target: ${Math.round(spec.targetSize * 100)}% size — hold ${spec.holdSec}s — ${spec.timeSec}s limit`, 'text-amber-300');
+  runElapsedMs = 0; lastValidFrameAt = 0;
+  pbCandidate = 1; pbCandidateStart = null; pbQualified = 1; pbPhoto = null;
+  timeLeft = gameMode === 'personal-best' ? 45 : spec.timeSec;
+  currentRecord = null;
+  logLine(logEl, gameMode === 'personal-best' ? `> physical_zip --personal-best ${zip}` : `> zip -9 ${zip} HUMAN  (method: ${spec.label})`, 'text-zinc-300');
+  logLine(logEl, gameMode === 'personal-best' ? '45s — hold a size for 2s to lock it' : `target: ${Math.round(spec.targetSize * 100)}% size — hold ${spec.holdSec}s — ${spec.timeSec}s limit`, 'text-amber-300');
   cueEl.textContent = 'SHRINK! elbows in, bend knees, crouch!';
-  clearInterval(runTimer);
-  runTimer = setInterval(() => {
-    timeLeft = spec.timeSec - Math.floor((Date.now() - runStart) / 1000);
-    if (timeLeft <= 0) {
-      clearInterval(runTimer);
-      if (state === 'compressing') {
-        logLine(logEl, `TIMEOUT — best was ${Math.round(bestRatio * 100)}%. press START COMPRESSION to retry.`, 'text-red-400');
-        setState('ready');
-        cueEl.textContent = 'TIMEOUT — retry, you can beat it.';
-      }
-    }
-  }, 500);
+  timerEl.textContent = `${timeLeft}s`;
 }
 
 btnGo.onclick = () => {
@@ -434,24 +532,38 @@ btnGo.onclick = () => {
 };
 
 function finishCompress(ratio: number) {
-  clearInterval(runTimer);
   finalRatio = ratio;
-  const compressedSnapshot = snapshotVideo(video);
+  const compressedSnapshot = gameMode === 'personal-best' && pbPhoto
+    ? pbPhoto
+    : snapshotVideo(video, facing === 'user');
   const zip = sanitizeName(nameInput.value);
   const saved = 1 - ratio;
   setState('zipped');
+  timerEl.textContent = 'DONE';
   cueEl.textContent = `${zip}.zip created successfully.`;
   logLine(logEl, `${zip}.zip created successfully.`, 'text-green-300');
   logLine(logEl, `Original: 100%  Compressed: ${Math.round(ratio * 100)}%  Saved: ${Math.round(saved * 100)}%`, 'text-amber-300');
   blip(990, 0.15);
   setTimeout(() => blip(1320, 0.2), 150);
   extractPanel.classList.remove('hidden');
+  terminalPanel.open = true;
+  resultPanel.classList.remove('hidden');
   if (baselinePhoto && compressedSnapshot) {
+    resultPhotos.classList.remove('hidden');
     originalPhoto.src = baselinePhoto;
     compressedPhoto.src = compressedSnapshot;
     compressedCaption.textContent = `COMPRESSED — ${Math.round(ratio * 100)}%`;
-    resultPanel.classList.remove('hidden');
-  }
+  } else resultPhotos.classList.add('hidden');
+  const coverage = baselineCoverage === 'full' ? 'full' : 'upper';
+  currentRecord = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: zip, mode: gameMode, method, coverage,
+    compressedPct: Math.round(ratio * 100), savedPct: Math.round(saved * 100),
+    createdAt: new Date().toISOString(),
+  };
+  saveRecord(currentRecord);
+  resultSummary.textContent = `${gameMode === 'classic' ? METHODS[method].label : 'Personal Best'} · ${coverage} body · saved on this device`;
+  renderRecords();
   logLine(logEl, 'press EXTRACT HUMAN to restore. ghost of your original pose saved.', 'text-zinc-300');
 }
 
@@ -503,12 +615,12 @@ function finishExtract() {
 btnDl.onclick = () => {
   const zip = sanitizeName(nameInput.value);
   const c = Math.round(finalRatio * 100), s = Math.round((1 - finalRatio) * 100);
-  downloadCert(zip, 100, c, s, method, snapshotVideo(video));
+  downloadCert(zip, 100, c, s, method, snapshotVideo(video, facing === 'user'));
   logLine(logEl, `downloaded ${zip}.zip.txt + snapshot`, 'text-zinc-400');
 };
 
 btnReset.onclick = () => {
-  clearInterval(runTimer); clearInterval(calTimer);
+  clearInterval(calTimer);
   startAfterCalibration = false;
   extracting = false; extractMode = 'none';
   baselineFrac = 0; baselinePose = null; baselineFeat = null;
@@ -525,7 +637,51 @@ btnReset.onclick = () => {
   originalPhoto.removeAttribute('src');
   compressedPhoto.removeAttribute('src');
   logLine(logEl, '-- reset --', 'text-zinc-500');
+  timerEl.textContent = 'READY';
   setState(camOn && modelsReady ? 'ready' : 'idle');
+};
+
+function renderRecords() {
+  const records = loadRecords();
+  if (!records.length) {
+    recordsList.innerHTML = '<p>No runs saved on this phone yet.</p>';
+    return;
+  }
+  recordsList.innerHTML = '';
+  records.slice(0, 5).forEach(record => {
+    const row = document.createElement('div');
+    row.className = 'record-row';
+    const title = document.createElement('strong');
+    title.textContent = `${record.compressedPct}% · ${record.name}.zip`;
+    const date = document.createElement('small');
+    date.textContent = new Date(record.createdAt).toLocaleDateString();
+    const meta = document.createElement('span');
+    meta.textContent = `${record.mode === 'classic' ? record.method : 'personal best'} · ${record.coverage}`;
+    row.append(title, date, meta);
+    recordsList.appendChild(row);
+  });
+}
+
+btnClearRecords.onclick = () => {
+  clearRecords();
+  renderRecords();
+  logLine(logEl, 'local records cleared. photos were never stored.', 'text-zinc-500');
+};
+
+btnShare.onclick = async () => {
+  if (!currentRecord) return;
+  btnShare.disabled = true;
+  btnShare.textContent = '◌ PREPARING CARD...';
+  try {
+    const card = await makeResultCard(currentRecord, includePhotos.checked ? baselinePhoto : null, includePhotos.checked ? compressedPhoto.src : null);
+    const result = await shareResult(currentRecord, card);
+    btnShare.textContent = result === 'shared' ? '✓ SHARED' : '✓ CARD DOWNLOADED';
+  } catch (e: any) {
+    if (e?.name !== 'AbortError') {
+      btnShare.textContent = '↗ TRY SHARE AGAIN';
+      logLine(logEl, `share failed: ${describeError(e)}`, 'text-red-400');
+    } else btnShare.textContent = '↗ SHARE RESULT';
+  } finally { btnShare.disabled = false; }
 };
 
 // setup inputs
@@ -546,8 +702,30 @@ document.querySelectorAll('.mbtn').forEach(b => {
 });
 document.querySelector('[data-m="balanced"]')?.classList.add('active');
 
+document.querySelectorAll<HTMLButtonElement>('.gmode').forEach(button => {
+  button.onclick = () => {
+    gameMode = button.dataset.mode as GameMode;
+    document.querySelectorAll('.gmode').forEach(x => x.classList.toggle('active', x === button));
+    methodsEl.classList.toggle('hidden', gameMode === 'personal-best');
+    methodDesc.textContent = gameMode === 'personal-best'
+      ? 'Get as small as possible in 45 seconds. Hold each score for two seconds to lock it.'
+      : METHODS[method].desc;
+    btnGo.textContent = gameMode === 'personal-best' ? '▼ START 45s CHALLENGE' : '▼ START COMPRESSION';
+  };
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state === 'compressing') {
+    lastValidFrameAt = 0;
+    holdStart = null; pbCandidateStart = null;
+    timerEl.textContent = 'PAUSED';
+  }
+});
+
 fitCanvas();
 requestAnimationFrame(fitCanvas); // re-fit after layout/fonts settle
 setState('idle');
 logLine(logEl, 'PHYSICAL ZIP v1.0 — Select object: [x] HUMAN', 'text-green-300');
 logLine(logEl, 'host: vercel static · compute: your browser · uploads: none', 'text-zinc-500');
+renderRecords();
+if (matchMedia('(max-width: 639px)').matches) document.querySelector<HTMLDetailsElement>('.terminal-panel')?.removeAttribute('open');

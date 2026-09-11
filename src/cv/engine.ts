@@ -48,8 +48,10 @@ export class CVEngine {
   private latestSegH = 0;
   private latestThumb: MaskThumb | null = null;
   fps = 0;
+  facing: 'user' | 'environment' = 'user';
   onFrame: (f: FrameInfo) => void = () => {};
   onStatus: (s: string) => void = () => {};
+  onCameraEnded: () => void = () => {};
 
   constructor(video: HTMLVideoElement) { this.video = video; }
 
@@ -98,7 +100,7 @@ export class CVEngine {
     this.onStatus(this.maskOK ? 'engine: mask+pose ready' : 'engine: pose-only (bbox fallback)');
   }
 
-  async startCamera(): Promise<void> {
+  async startCamera(facing: 'user' | 'environment' = 'user'): Promise<'user' | 'environment'> {
     if (!navigator.mediaDevices?.getUserMedia) {
       const ctx = window.isSecureContext ? '' : ' (page is not a secure context — camera requires HTTPS)';
       throw new Error(`camera API unavailable in this browser${ctx}`);
@@ -109,10 +111,11 @@ export class CVEngine {
     this.video.setAttribute('playsinline', '');
     this.video.setAttribute('muted', '');
 
+    this.stopCamera();
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 480 }, height: { ideal: 360 }, facingMode: 'user' },
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: { ideal: facing } },
         audio: false,
       });
     } catch (e: any) {
@@ -121,6 +124,10 @@ export class CVEngine {
       } else throw e;
     }
     this.video.srcObject = stream;
+    const actualFacing = stream.getVideoTracks()[0]?.getSettings().facingMode;
+    this.facing = actualFacing === 'environment' ? 'environment' : facing;
+    const track = stream.getVideoTracks()[0];
+    if (track) track.onended = () => this.onCameraEnded();
     try {
       await this.video.play();
     } catch (e: any) {
@@ -142,6 +149,17 @@ export class CVEngine {
         }
       }, 200);
     });
+    return this.facing;
+  }
+
+  stopCamera() {
+    const stream = this.video.srcObject as MediaStream | null;
+    stream?.getTracks().forEach(track => track.stop());
+    this.video.srcObject = null;
+    this.latestLandmarks = null;
+    this.latestPersonFrac = 0;
+    this.latestFromMask = false;
+    this.latestThumb = null;
   }
 
   start() {
@@ -167,7 +185,7 @@ export class CVEngine {
 
   private process(now: number): boolean {
     const runPose = now - this.lastPoseT >= 100; // 10 fps: responsive without blocking the page
-    const runSegmentation = now - this.lastSegT >= 250; // mask inference is much heavier
+    const runSegmentation = now - this.lastSegT >= (this.fps > 0 && this.fps < 7 ? 500 : 300);
     if (!runPose && !runSegmentation) return false;
 
     if (runPose) {

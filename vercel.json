@@ -3,7 +3,7 @@
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "Permissions-Policy", "value": "camera=self" }
+        { "key": "Permissions-Policy", "value": "camera=(self), web-share=(self)" }
       ]
     },
     {

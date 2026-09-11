@@ -29,12 +29,14 @@ export function downloadCert(zipName: string, originalPct: number, compressedPct
   }
 }
 
-export function snapshotVideo(video: HTMLVideoElement): string | null {
+export function snapshotVideo(video: HTMLVideoElement, mirror = false): string | null {
   try {
     const c = document.createElement('canvas');
     c.width = video.videoWidth || 640;
     c.height = video.videoHeight || 480;
-    c.getContext('2d')!.drawImage(video, 0, 0, c.width, c.height);
+    const ctx = c.getContext('2d')!;
+    if (mirror) { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, 0, 0, c.width, c.height);
     return c.toDataURL('image/png');
   } catch { return null; }
 }
