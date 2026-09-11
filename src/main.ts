@@ -64,6 +64,7 @@ let runStart = 0, runTimer: any = null, timeLeft = 0;
 let bestRatio = 1, holdStart: number | null = null;
 let lastCueT = 0, lastMilestone = 0;
 let noPersonSince: number | null = null;
+let startAfterCalibration = false;
 
 // extract run
 let extracting = false;
@@ -76,7 +77,7 @@ function setState(s: State) {
   modeLabel.textContent = 'MODE: ' + s.toUpperCase();
   btnCal.disabled = !(camOn && modelsReady && (s === 'idle' || s === 'ready'));
   btnCal.classList.toggle('opacity-40', btnCal.disabled);
-  btnGo.disabled = !(camOn && modelsReady && baselineFrac > 0 && (s === 'ready' || s === 'idle'));
+  btnGo.disabled = !(camOn && modelsReady && (s === 'ready' || s === 'idle'));
   btnGo.classList.toggle('opacity-40', btnGo.disabled);
 }
 
@@ -340,6 +341,7 @@ btnCal.onclick = () => {
     if (n > 0) { cueEl.textContent = `HOLD STILL — ${n}…`; return; }
     clearInterval(calTimer);
     if (calSamples.length < 10) {
+      startAfterCalibration = false;
       logLine(logEl, 'calibration failed — no subject. try better light / move into frame.', 'text-red-400');
       setState('ready');
       return;
@@ -375,10 +377,14 @@ btnCal.onclick = () => {
     cueEl.textContent = 'CALIBRATED — press START COMPRESSION and shrink.';
     setState('ready');
     blip(740);
+    if (startAfterCalibration) {
+      startAfterCalibration = false;
+      startCompression();
+    }
   }, 1000);
 };
 
-btnGo.onclick = () => {
+function startCompression() {
   if (!baselineFrac || state === 'compressing') return;
   const spec = METHODS[method];
   const zip = sanitizeName(nameInput.value) + '.zip';
@@ -404,6 +410,16 @@ btnGo.onclick = () => {
       }
     }
   }, 500);
+}
+
+btnGo.onclick = () => {
+  if (state === 'compressing') return;
+  if (!baselineFrac) {
+    startAfterCalibration = true;
+    btnCal.click();
+    return;
+  }
+  startCompression();
 };
 
 function finishCompress(ratio: number) {
@@ -475,6 +491,7 @@ btnDl.onclick = () => {
 
 btnReset.onclick = () => {
   clearInterval(runTimer); clearInterval(calTimer);
+  startAfterCalibration = false;
   extracting = false; extractMode = 'none';
   baselineFrac = 0; baselinePose = null; baselineFeat = null;
   baselineCoverage = 'none'; baselineThumb = null; baselinePhoto = null;
