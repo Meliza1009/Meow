@@ -30,6 +30,10 @@ const extractPanel = $('extractPanel'), partsEl = $('parts');
 const btnExtract = $('btnExtract') as HTMLButtonElement, btnDl = $('btnDl') as HTMLButtonElement;
 const ghostPhoto = $('ghostPhoto') as HTMLImageElement;
 const btnManualDone = $('btnManualDone') as HTMLButtonElement;
+const resultPanel = $('resultPanel');
+const originalPhoto = $('originalPhoto') as HTMLImageElement;
+const compressedPhoto = $('compressedPhoto') as HTMLImageElement;
+const compressedCaption = $('compressedCaption');
 
 type State = 'idle' | 'calibrating' | 'ready' | 'compressing' | 'zipped' | 'extracting' | 'done';
 let state: State = 'idle';
@@ -139,6 +143,16 @@ function onFrame(f: FrameInfo) {
   }
   noPersonSince = null;
 
+  // Ignore tiny, noisy detections. Walking away from the camera must pause the
+  // run instead of being counted as an implausibly perfect compression.
+  if (baselineFrac > 0 && f.personFrac < baselineFrac * 0.25) {
+    if (state === 'compressing') {
+      warnEl.textContent = '⚠ SUBJECT TOO FAR AWAY — return to the marker (paused)';
+      holdStart = null;
+    }
+    return;
+  }
+
   // smooth
   emaFrac = ema(emaFrac, f.personFrac, 0.2);
 
@@ -169,7 +183,7 @@ function onFrame(f: FrameInfo) {
     if (feat.ok && feat.scaleRef > 0 && baselineScale > 0) {
       const drift = feat.scaleRef / baselineScale;
       const strict = baselineCoverage === 'full';
-      if (strict ? drift < 0.85 : drift < 0.6) {
+      if (strict ? drift < 0.85 : drift < 0.8) {
         warnEl.textContent = strict
           ? '⚠ SUBJECT MOVED BACK — step forward to your marker (paused)'
           : '⚠ DRIFTING FAR — come a little closer (paused)';
@@ -390,6 +404,7 @@ function startCompression() {
   const zip = sanitizeName(nameInput.value) + '.zip';
   setState('compressing');
   extractPanel.classList.add('hidden');
+  resultPanel.classList.add('hidden');
   ghostPhoto.classList.add('hidden');
   btnManualDone.classList.add('hidden');
   bestRatio = 1; holdStart = null; lastMilestone = 0; lastCueT = 0; cueCycle = 0;
@@ -425,6 +440,7 @@ btnGo.onclick = () => {
 function finishCompress(ratio: number) {
   clearInterval(runTimer);
   finalRatio = ratio;
+  const compressedSnapshot = snapshotVideo(video);
   const zip = sanitizeName(nameInput.value);
   const saved = 1 - ratio;
   setState('zipped');
@@ -434,6 +450,12 @@ function finishCompress(ratio: number) {
   blip(990, 0.15);
   setTimeout(() => blip(1320, 0.2), 150);
   extractPanel.classList.remove('hidden');
+  if (baselinePhoto && compressedSnapshot) {
+    originalPhoto.src = baselinePhoto;
+    compressedPhoto.src = compressedSnapshot;
+    compressedCaption.textContent = `COMPRESSED — ${Math.round(ratio * 100)}%`;
+    resultPanel.classList.remove('hidden');
+  }
   logLine(logEl, 'press EXTRACT HUMAN to restore. ghost of your original pose saved.', 'text-zinc-300');
 }
 
@@ -503,6 +525,9 @@ btnReset.onclick = () => {
   cueEl.textContent = 'reset. calibrate again when ready.';
   warnEl.textContent = '';
   extractPanel.classList.add('hidden');
+  resultPanel.classList.add('hidden');
+  originalPhoto.removeAttribute('src');
+  compressedPhoto.removeAttribute('src');
   logLine(logEl, '-- reset --', 'text-zinc-500');
   setState(camOn && modelsReady ? 'ready' : 'idle');
 };

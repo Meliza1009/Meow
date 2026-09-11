@@ -53,6 +53,19 @@
           <button id="btnGo" class="px-3 py-2 border border-amber-500 text-amber-300 hover:bg-amber-950 rounded opacity-40" disabled>▼ START COMPRESSION</button>
           <button id="btnReset" class="px-3 py-2 border border-zinc-700 text-zinc-400 hover:bg-zinc-900 rounded">↺ RESET</button>
         </div>
+        <div id="resultPanel" class="hidden border-t border-green-900 p-3 font-mono">
+          <div class="mb-2 text-xs text-amber-300">COMPRESSION PROOF — captured frames</div>
+          <div class="grid grid-cols-2 gap-3">
+            <figure>
+              <img id="originalPhoto" alt="Original human before compression" class="aspect-[4/3] w-full rounded border border-green-700 object-cover" />
+              <figcaption class="mt-1 text-xs text-green-300">ORIGINAL — 100%</figcaption>
+            </figure>
+            <figure>
+              <img id="compressedPhoto" alt="Human at completed compression" class="aspect-[4/3] w-full rounded border border-amber-500 object-cover" />
+              <figcaption id="compressedCaption" class="mt-1 text-xs text-amber-300">COMPRESSED</figcaption>
+            </figure>
+          </div>
+        </div>
       </section>
 
       <!-- RIGHT: setup + terminal -->

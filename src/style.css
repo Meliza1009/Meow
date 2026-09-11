@@ -10,6 +10,7 @@ html, body {
 video { transform: scaleX(-1); } /* mirror selfie */
 #overlay { transform: scaleX(-1); }
 #ghostPhoto { transform: scaleX(-1); }
+#originalPhoto, #compressedPhoto { transform: scaleX(-1); }
 .mbtn.active {
   outline: 2px solid currentColor;
 }
