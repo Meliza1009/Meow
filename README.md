@@ -64,7 +64,7 @@ npm run build
 npm run preview
 ```
 
-Build verification: the current checkout fails `npm run build` in `src/main.ts` because of a function argument-count mismatch and unresolved `pickCue` / `cueCycle` references. These application issues must be resolved before generating a production build. The screenshots and interface recording were captured using the Vite development server.
+Build verification: the current checkout fails `npm run build` in `src/main.ts` because of a function argument-count mismatch and unresolved `pickCue` / `cueCycle` references. These application issues must be resolved before generating a production build. The screenshots were captured using the Vite development server.
 
 To run the existing browser UI checks:
 
@@ -113,8 +113,8 @@ For Hardware:
 
 ### Project Demo
 # Video
-[Watch or download the interface walkthrough](docs/demo/physical-zip-interface.webm)
-*This recording demonstrates the illustrated zip/extract interaction, entering the game, switching Classic difficulty settings, and selecting Personal Best. It shows the actual interface without camera activation; it does not demonstrate live pose inference or a completed camera round.*
+[Watch or download the live gameplay demo](docs/demo/Screencast%20from%202026-09-12%2005-29-58.mp4)
+*A real camera gameplay recording showing baseline calibration, live pose tracking, and a successful compression round with the player reaching 67% size (33% saved).*
 
 # Additional Demos
 [Interactive demo source](src/ui/intro.ts) · [Browser interaction checks](tests/frontend.spec.ts) · [Workflow diagram](docs/workflow.svg). Run the app locally to try the illustrated demo without camera access. [Live hosted demo](https://uselessprojecttemp-lac.vercel.app/).
