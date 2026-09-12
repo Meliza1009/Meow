@@ -113,7 +113,9 @@ For Hardware:
 
 ### Project Demo
 # Video
-[Watch or download the live gameplay demo](docs/demo/Screencast%20from%202026-09-12%2005-29-58.mp4)
+
+https://github.com/user-attachments/assets/2416c7a8-3df4-4032-99a7-adf027d4e7a5
+
 *A real camera gameplay recording showing baseline calibration, live pose tracking, and a successful compression round with the player reaching 67% size (33% saved).*
 
 # Additional Demos
